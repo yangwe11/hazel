@@ -47,6 +47,26 @@ func (s PluginState) String() string {
 	}
 }
 
+// allowedTransitions defines which state transitions are valid.
+var allowedTransitions = map[PluginState]map[PluginState]bool{
+	StateUnloaded:    {StateLoaded: true, StateError: true},
+	StateLoaded:      {StateInitialized: true, StateError: true, StateStopped: true},
+	StateInitialized: {StateRunning: true, StateStopped: true, StateError: true},
+	StateRunning:     {StateStopped: true, StateError: true},
+	StateStopped:     {},
+	StateError:       {},
+}
+
+// CanTransition reports whether moving from current to next is a valid
+// state transition.
+func CanTransition(current, next PluginState) bool {
+	allowed, ok := allowedTransitions[current]
+	if !ok {
+		return false
+	}
+	return allowed[next]
+}
+
 // StateChange records a plugin's transition from one state to another.
 type StateChange struct {
 	PluginID string

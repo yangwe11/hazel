@@ -83,6 +83,7 @@ type PluginRPCClient struct {
 
 func (c *PluginRPCClient) Initialize(args InitializeArgs) error {
 	brokerID := c.broker.NextId()
+	args.HostServer = brokerID
 	go c.broker.AcceptAndServe(brokerID, c.hostRPC)
 	reply := struct{}{}
 	return c.client.Call("Plugin.Initialize", args, &reply)
