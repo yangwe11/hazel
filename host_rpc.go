@@ -2,42 +2,48 @@ package hazel
 
 import "net/rpc"
 
-// HostAware is an optional interface that plugins can implement to receive
-// a HostRPC client during initialization. If a plugin implements HostAware,
-// the PluginRPCServer calls SetHostRPC after connecting to the host.
+// =========================================================================
+// Plugin → Host RPC
+//
+// The host exposes a HostRPC server to every plugin over go-plugin's mux
+// broker (no separate TCP listener). A plugin opts in by implementing
+// HostAware; the host injects a HostRPC client during Initialize.
+// =========================================================================
+
+// HostAware is an optional interface a plugin may implement to receive a
+// HostRPC client during Initialize.
 type HostAware interface {
 	SetHostRPC(HostRPC)
 }
 
-// =========================================================================
-// Plugin → Host RPC interface
+// HostRPC defines the methods a plugin can call on the host. Each method must
+// follow net/rpc's signature: Method(args T, reply *U) error.
 //
-// The host implements this interface and exposes it to plugins via a TCP
-// listener. Plugins call these methods to interact with the host.
-// =========================================================================
-
-// HostRPC defines the methods a plugin can call on the host.
+// To add a callback, add a method here and mirror it on HostRPCClient (below)
+// and hostRPCAdapter (in manager.go).
 type HostRPC interface {
+	// Ping lets a plugin verify its connection to the host is alive.
+	Ping(Empty, *Empty) error
 }
 
-// =========================================================================
-// Plugin-side RPC client (plugin uses this to call the host)
-// =========================================================================
-
-// HostRPCClient wraps a raw *rpc.Client and implements HostRPC by
-// translating each method into an rpc.Call over a TCP connection to the
-// host. It lives in the plugin process.
+// HostRPCClient implements HostRPC in the plugin process, translating each
+// call into an rpc.Call over the broker connection.
 type HostRPCClient struct {
 	client *rpc.Client
 }
 
-// =========================================================================
-// Host-side RPC server (serves HostRPC to plugins over TCP)
-// =========================================================================
+func (c *HostRPCClient) Ping(_ Empty, _ *Empty) error {
+	return c.client.Call("Plugin.Ping", Empty{}, &Empty{})
+}
 
-// HostRPCServer wraps a HostRPC implementation and serves it via net/rpc.
-// It is the object registered with rpc.RegisterName and exposed to plugins
-// over a TCP listener.
-type HostRPCServer struct {
-	delegate HostRPC
+// hostRPCAdapter exposes the Manager to plugins as HostRPC. It is separate from
+// Manager so the RPC surface stays minimal and explicit — adding an exported
+// method to Manager does not accidentally expose it to plugins.
+type hostRPCAdapter struct {
+	manager *Manager
+}
+
+func (a *hostRPCAdapter) Ping(_ Empty, _ *Empty) error {
+	// TODO: report real liveness once health tracking is added.
+	return nil
 }

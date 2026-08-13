@@ -51,11 +51,16 @@ type PluginInstance struct {
 
 	// go-plugin internals (set during Load)
 	client    *plugin.Client
-	rpcClient lifecycle
+	rpcClient Lifecycle
 
 	stateMu   sync.Mutex
 	changedAt time.Time
 	listeners []chan StateChange
+
+	// doneCh is closed when the process is expected to stop, so the crash
+	// monitor can distinguish a clean shutdown from an unexpected exit.
+	doneCh   chan struct{}
+	doneOnce sync.Once
 }
 
 // TransitionTo attempts to move the plugin to the given state. It returns
@@ -101,43 +106,32 @@ func (pi *PluginInstance) Listen() <-chan StateChange {
 	return ch
 }
 
-// ServiceInfo describes a service registered by a plugin.
-type ServiceInfo struct {
-	PluginID    string
-	ServiceName string
-	Version     string
-	Metadata    map[string]string
+// signalStop marks the plugin's process as intentionally stopping. It is safe
+// to call more than once.
+func (pi *PluginInstance) signalStop() {
+	pi.doneOnce.Do(func() { close(pi.doneCh) })
 }
 
-// Manager manages plugin lifecycle: discovery, loading, initialization,
-// start, stop, and dependency-ordered parallel startup. It implements
-// HostRPC so that plugins can call back to the host over TCP.
+// Manager manages the plugin lifecycle: discovery, loading, initialization,
+// start, stop, and dependency-ordered parallel startup.
 type Manager struct {
 	config  ManagerConfig
 	mu      sync.RWMutex
 	plugins map[string]*PluginInstance
 
-	hostRPC *HostRPCServer // TCP-based HostRPC server
-
 	log        *log.Logger
 	shutdownCh chan struct{}
 }
 
-// NewManager creates a Manager and starts the HostRPC TCP listener so
-// plugins can communicate back to the host.
+// NewManager creates a Manager. Plugins are registered via Discover before
+// their lifecycle is driven.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
-	m := &Manager{
+	return &Manager{
 		config:     cfg,
 		plugins:    make(map[string]*PluginInstance),
 		log:        log.New(os.Stdout, "[hazel] ", log.LstdFlags),
 		shutdownCh: make(chan struct{}),
-	}
-
-	m.hostRPC = &HostRPCServer{
-		delegate: m,
-	}
-
-	return m, nil
+	}, nil
 }
 
 // =========================================================================
@@ -170,6 +164,7 @@ func (m *Manager) Discover() (int, error) {
 			Meta:      meta,
 			PluginDir: meta.pluginDir,
 			State:     StateUnloaded,
+			doneCh:    make(chan struct{}),
 		}
 		count++
 	}
@@ -201,7 +196,7 @@ func (m *Manager) Load(pluginID string) error {
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			lifecyclePluginName: &lifecyclePlugin{},
+			lifecyclePluginName: &lifecyclePlugin{hostRPC: &hostRPCAdapter{manager: m}},
 		},
 		Cmd:        exec.Command(execPath),
 		Managed:    true,
@@ -252,9 +247,10 @@ func (m *Manager) Initialize(pluginID string) error {
 		pi.TransitionTo(StateError, fmt.Errorf("dispense: %w", err))
 		return fmt.Errorf("dispense plugin %s: %w", pluginID, err)
 	}
-	pi.rpcClient = dispensed.(lifecycle)
+	pi.rpcClient = dispensed.(Lifecycle)
 
-	// Call Initialize on the plugin with the host's TCP address.
+	// Initialize the plugin, passing host configuration and the host's RPC
+	// endpoint so the plugin can call back to the host.
 	args := InitializeArgs{
 		Config: nil, // reserved for future use
 	}
@@ -312,6 +308,10 @@ func (m *Manager) Stop(pluginID string) error {
 		return fmt.Errorf("%w: cannot stop from %s", ErrInvalidStateTransition, pi.State)
 	}
 
+	// Tell the crash monitor this exit is expected so it does not report the
+	// subsequent process termination as a crash.
+	pi.signalStop()
+
 	// Attempt graceful stop via RPC if the plugin is initialized or running.
 	if pi.rpcClient != nil && (pi.State == StateInitialized || pi.State == StateRunning) {
 		done := make(chan error, 1)
@@ -348,7 +348,9 @@ func (m *Manager) Stop(pluginID string) error {
 
 // getPlugin returns the PluginInstance for the given ID.
 func (m *Manager) getPlugin(id string) (*PluginInstance, error) {
+	m.mu.RLock()
 	pi, ok := m.plugins[id]
+	m.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrPluginNotFound, id)
 	}
@@ -379,7 +381,8 @@ func (m *Manager) ListPlugins() []*PluginInstance {
 // Internal helpers
 // =========================================================================
 
-// monitor polls a running plugin for unexpected exit.
+// monitor polls a running plugin for unexpected exit. It exits when the
+// plugin is stopped intentionally (doneCh) or the manager shuts down.
 func (m *Manager) monitor(pi *PluginInstance) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -393,8 +396,9 @@ func (m *Manager) monitor(pi *PluginInstance) {
 					fmt.Errorf("%w: process terminated", ErrPluginCrashed))
 				return
 			}
+		case <-pi.doneCh:
+			return
 		case <-m.shutdownCh:
-			// Manager is shutting down; Stop will handle cleanup.
 			return
 		}
 	}

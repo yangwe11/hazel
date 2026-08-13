@@ -7,55 +7,66 @@ import (
 )
 
 // =========================================================================
-// Host → Plugin RPC interface
+// Host → Plugin RPC (lifecycle)
 //
-// Plugins must implement this interface. The host calls these methods
-// over net/rpc via go-plugin to manage the plugin's lifecycle.
+// Plugin authors implement Lifecycle. The host drives it over go-plugin's
+// net/rpc transport.
 // =========================================================================
 
-// lifecycle defines the lifecycle methods the host calls on a plugin.
-type lifecycle interface {
-	// Initialize the plugin will connect the HostRPC over the connect by go-plugin
+// Lifecycle is the interface every plugin must implement. The host calls these
+// methods to manage the plugin's lifecycle.
+type Lifecycle interface {
+	// Initialize runs once after the plugin process starts and before Start.
+	// Use it to load configuration and prepare resources.
 	Initialize(args InitializeArgs) error
+
+	// Start begins the plugin's work.
 	Start(args StartArgs) error
+
+	// Stop asks the plugin to shut down gracefully.
 	Stop() error
 }
 
-// InitializeArgs carries the configuration and environment info the host
-// passes to a plugin during initialization.
+// InitializeArgs carries initialization data from the host to the plugin.
 type InitializeArgs struct {
-	// Config holds plugin-specific configuration from the host.
+	// Config holds plugin-specific configuration provided by the host.
 	Config map[string]any
 
-	// HostServer ID
+	// HostServer is the mux-broker ID of the host's HostRPC server. The host
+	// sets it before calling Initialize; the plugin dials it to obtain a
+	// HostRPC client. Plugins do not need to read this field directly.
 	HostServer uint32
 }
 
-// StartArgs carries parameters for starting plugin work.
-// First indicate the first start.
+// StartArgs carries parameters for Start.
 type StartArgs struct {
+	// First is true on the process's first start. Reserved for restart support;
+	// the host currently starts each plugin exactly once.
 	First bool
 }
 
+// Empty is a placeholder used for RPC methods with no arguments or result.
 type Empty struct{}
 
 // =========================================================================
-// Host-side RPC client
+// Host-side RPC client (the host drives the plugin's Lifecycle)
 // =========================================================================
 
-// lifecycleRPC wraps a raw *rpc.Client and implements lifecycle by
-// translating each method call into an rpc.Call. It lives in the host
-// process.
+// lifecycleRPC implements Lifecycle in the host process by translating each
+// method into an rpc.Call on the plugin's connection.
 type lifecycleRPC struct {
 	client  *rpc.Client
 	broker  *plugin.MuxBroker
-	hostRPC HostRPC
+	hostRPC HostRPC // served back to the plugin during Initialize
 }
 
 func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
+	// Allocate a broker ID and serve the host's HostRPC implementation so the
+	// plugin can dial back to the host during its own Initialize.
 	brokerID := c.broker.NextId()
 	args.HostServer = brokerID
 	go c.broker.AcceptAndServe(brokerID, c.hostRPC)
+
 	reply := Empty{}
 	return c.client.Call("Plugin.Initialize", args, &reply)
 }
@@ -74,15 +85,15 @@ func (c *lifecycleRPC) Stop() error {
 // Plugin-side RPC server
 // =========================================================================
 
-// lifecycleRPCServer wraps a lifecycle implementation and serves it via net/rpc.
-// It lives in the plugin process and is registered by go-plugin.
+// lifecycleRPCServer wraps a Lifecycle implementation and serves it over
+// net/rpc in the plugin process.
 type lifecycleRPCServer struct {
-	impl   lifecycle
+	impl   Lifecycle
 	broker *plugin.MuxBroker
 }
 
-// Initialize connects to the host's TCP-based HostRPC server to establish
-// bidirectional communication, then delegates to the plugin implementation.
+// Initialize dials the host's HostRPC server over the mux broker, injects it
+// into HostAware plugins, then delegates to the implementation.
 func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 	conn, err := s.broker.Dial(args.HostServer)
 	if err != nil {
@@ -90,9 +101,6 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 	}
 
 	hostClient := &HostRPCClient{client: rpc.NewClient(conn)}
-
-	// If the plugin implements HostAware, inject the HostRPC client so the
-	// plugin can call back to the host.
 	if ha, ok := s.impl.(HostAware); ok {
 		ha.SetHostRPC(hostClient)
 	}
@@ -108,26 +116,19 @@ func (s *lifecycleRPCServer) Stop(_ *Empty, _ *Empty) error {
 	return s.impl.Stop()
 }
 
-// lifecyclePlugin implements go-plugin's plugin.Plugin interface for net/rpc
-// transport between host and plugin processes.
+// lifecyclePlugin implements plugin.Plugin, bridging Lifecycle over net/rpc
+// between the host and plugin processes.
 type lifecyclePlugin struct {
-	impl lifecycle
+	impl    Lifecycle // plugin side: the implementation to serve
+	hostRPC HostRPC   // host side: what to expose to the plugin
 }
 
-// Server is called on the PLUGIN SIDE. It returns an RPC server object that
-// go-plugin registers and serves over the plugin's connection.
-func (r *lifecyclePlugin) Server(broker *plugin.MuxBroker) (interface{}, error) {
-	return &lifecycleRPCServer{
-		impl:   r.impl,
-		broker: broker,
-	}, nil
+// Server runs on the PLUGIN side.
+func (p *lifecyclePlugin) Server(broker *plugin.MuxBroker) (interface{}, error) {
+	return &lifecycleRPCServer{impl: p.impl, broker: broker}, nil
 }
 
-// Client is called on the HOST SIDE. It receives the raw *rpc.Client and
-// returns a typed lifecycle stub the host uses to drive the plugin.
-func (r *lifecyclePlugin) Client(broker *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
-	return &lifecycleRPC{
-		client: client,
-		broker: broker,
-	}, nil
+// Client runs on the HOST side.
+func (p *lifecyclePlugin) Client(broker *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
+	return &lifecycleRPC{client: client, broker: broker, hostRPC: p.hostRPC}, nil
 }
