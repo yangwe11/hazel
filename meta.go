@@ -105,11 +105,11 @@ func ScanDirectory(root string) ([]PluginMeta, error) {
 // checkEngineCompatibility reports whether the plugin's engineRequirement is
 // satisfied by the running engine version. An empty requirement always passes.
 func checkEngineCompatibility(meta PluginMeta) error {
-	if Match(string(meta.EngineRequirement), Version) {
+	if Match(string(meta.EngineRequirement), EngineVersion) {
 		return nil
 	}
 	return fmt.Errorf("%w: plugin %s requires engine %q, but hazel is %s",
-		ErrEngineMismatch, meta.ID, string(meta.EngineRequirement), Version)
+		ErrEngineMismatch, meta.ID, string(meta.EngineRequirement), EngineVersion)
 }
 
 // validateMeta checks that all required fields are present and valid,

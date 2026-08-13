@@ -6,11 +6,6 @@ import (
 	"strings"
 )
 
-// Version is the hazel engine version. Plugins declare an engineRequirement
-// against this value; Discover skips plugins whose requirement is not met.
-// Bump this on every release following semantic versioning.
-const Version = "0.1.0"
-
 // VersionSpecifiers represents a version constraint composed of one or more
 // clauses separated by commas. It implements a subset of PEP 440 version
 // specifiers with the following operators:

@@ -4,6 +4,11 @@ import (
 	"github.com/hashicorp/go-plugin"
 )
 
+// EngineVersion is the hazel engine version. Plugins declare an engineRequirement
+// against this value; Discover report plugins whose requirement is not met.
+// Bump this on every release following semantic versioning.
+const EngineVersion = "0.1.0"
+
 // HandshakeConfig is the protocol version and magic cookie shared between the
 // host and plugins. Both sides must use identical values for the handshake to
 // succeed.
