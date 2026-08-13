@@ -155,9 +155,10 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 // plugins to the registry in the Unloaded state. Plugins that are already
 // registered (by ID) are skipped.
 //
-// If any plugin's engineRequirement is not satisfied by the running engine
-// version, Discover registers nothing and returns an error joining every
-// incompatibility. Returns the number of newly discovered plugins.
+// Discover registers nothing and returns an error if any plugin ID appears
+// more than once in the scan, or if any plugin's engineRequirement is not
+// satisfied by the running engine version. Returns the number of newly
+// discovered plugins.
 func (m *Manager) Discover() (int, error) {
 	var all []PluginMeta
 	for _, dir := range m.config.PluginDirs {
@@ -166,6 +167,22 @@ func (m *Manager) Discover() (int, error) {
 			return 0, fmt.Errorf("scan %s: %w", dir, err)
 		}
 		all = append(all, metas...)
+	}
+
+	// Reject duplicate IDs so the registry keeps a unique ID per plugin.
+	var duplicates []error
+	seen := make(map[string]string, len(all)) // ID → plugin directory
+	for _, meta := range all {
+		if prev, ok := seen[meta.ID]; ok {
+			duplicates = append(duplicates,
+				fmt.Errorf("%w: plugin ID %q already discovered in %s (now in %s)",
+					ErrDuplicatePluginID, meta.ID, prev, meta.pluginDir))
+			continue
+		}
+		seen[meta.ID] = meta.pluginDir
+	}
+	if len(duplicates) > 0 {
+		return 0, errors.Join(duplicates...)
 	}
 
 	// Reject the whole discovery up front if any plugin is incompatible with

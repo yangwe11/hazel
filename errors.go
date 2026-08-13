@@ -20,6 +20,9 @@ var (
 	// by the running engine version.
 	ErrEngineMismatch = errors.New("plugin requires a different engine version")
 
+	// ErrDuplicatePluginID indicates two discovered plugins share the same ID.
+	ErrDuplicatePluginID = errors.New("duplicate plugin ID")
+
 	// ErrInvalidStateTransition indicates an operation would move a plugin
 	// through an invalid lifecycle transition.
 	ErrInvalidStateTransition = errors.New("invalid plugin state transition")
