@@ -8,7 +8,6 @@ import (
 // PluginState represents a point in the plugin lifecycle.
 type PluginState int
 
-//go:generate stringer -type=PluginState
 const (
 	// StateUnloaded is the initial state after discovery, before Load().
 	StateUnloaded PluginState = iota

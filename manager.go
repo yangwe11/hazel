@@ -51,7 +51,7 @@ type PluginInstance struct {
 
 	// go-plugin internals (set during Load)
 	client    *plugin.Client
-	rpcClient PluginRPC
+	rpcClient lifecycle
 
 	stateMu   sync.Mutex
 	changedAt time.Time
@@ -201,7 +201,7 @@ func (m *Manager) Load(pluginID string) error {
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			pluginSetName: &pluginRunner{},
+			lifecyclePluginName: &lifecyclePlugin{},
 		},
 		Cmd:        exec.Command(execPath),
 		Managed:    true,
@@ -246,13 +246,13 @@ func (m *Manager) Initialize(pluginID string) error {
 		pi.TransitionTo(StateError, fmt.Errorf("dispense rpc: %w", err))
 		return fmt.Errorf("connect to plugin %s: %w", pluginID, err)
 	}
-	dispensed, err := protocol.Dispense(pluginSetName)
+	dispensed, err := protocol.Dispense(lifecyclePluginName)
 	if err != nil {
 		pi.client.Kill()
 		pi.TransitionTo(StateError, fmt.Errorf("dispense: %w", err))
 		return fmt.Errorf("dispense plugin %s: %w", pluginID, err)
 	}
-	pi.rpcClient = dispensed.(PluginRPC)
+	pi.rpcClient = dispensed.(lifecycle)
 
 	// Call Initialize on the plugin with the host's TCP address.
 	args := InitializeArgs{

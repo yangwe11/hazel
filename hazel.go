@@ -15,7 +15,7 @@ var HandshakeConfig = plugin.HandshakeConfig{
 	MagicCookieValue: "hazel",
 }
 
-const pluginSetName = "plugin"
+const lifecyclePluginName = "lifecycle"
 
 // Serve is the entry point for plugin processes. Plugin authors call this
 // from main(), passing their PluginRPC implementation.
@@ -28,11 +28,11 @@ const pluginSetName = "plugin"
 //
 // Serve handles the go-plugin handshake and RPC serving. It does not
 // return; on error it logs and exits.
-func Serve(impl PluginRPC) {
+func Serve(impl lifecycle) {
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			pluginSetName: &pluginRunner{impl: impl},
+			lifecyclePluginName: &lifecyclePlugin{impl: impl},
 		},
 		// A non-nil set here enables gRPC; we leave it nil for pure net/rpc.
 		GRPCServer: nil,
