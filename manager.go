@@ -1,6 +1,7 @@
 package hazel
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -31,6 +32,11 @@ type ManagerConfig struct {
 
 	// StopTimeout is the per-plugin deadline for graceful shutdown.
 	StopTimeout time.Duration
+
+	// Command customizes how the plugin process is launched, e.g. to inject
+	// extra flags or environment variables. If nil, the binary at execPath is
+	// executed directly.
+	Command func(execPath string) *exec.Cmd
 }
 
 // DefaultManagerConfig returns a ManagerConfig with sensible defaults.
@@ -53,14 +59,21 @@ type PluginInstance struct {
 	client    *plugin.Client
 	rpcClient Lifecycle
 
+	// started is true once Start has succeeded at least once; it drives
+	// StartArgs.First across restarts.
+	started bool
+
 	stateMu   sync.Mutex
 	changedAt time.Time
 	listeners []chan StateChange
 
-	// doneCh is closed when the process is expected to stop, so the crash
-	// monitor can distinguish a clean shutdown from an unexpected exit.
-	doneCh   chan struct{}
-	doneOnce sync.Once
+	// stopCh is closed to tell the crash monitor a shutdown is expected. It is
+	// recreated on each Start and closed by Stop.
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	// monitorWG tracks the crash monitor goroutine so Stop and Load can wait
+	// for it to exit before resetting per-lifecycle state.
+	monitorWG sync.WaitGroup
 }
 
 // TransitionTo attempts to move the plugin to the given state. It returns
@@ -109,7 +122,7 @@ func (pi *PluginInstance) Listen() <-chan StateChange {
 // signalStop marks the plugin's process as intentionally stopping. It is safe
 // to call more than once.
 func (pi *PluginInstance) signalStop() {
-	pi.doneOnce.Do(func() { close(pi.doneCh) })
+	pi.stopOnce.Do(func() { close(pi.stopCh) })
 }
 
 // Manager manages the plugin lifecycle: discovery, loading, initialization,
@@ -140,8 +153,11 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 
 // Discover scans all configured plugin directories and adds discovered
 // plugins to the registry in the Unloaded state. Plugins that are already
-// registered (by ID) are skipped. Returns the number of newly discovered
-// plugins.
+// registered (by ID) are skipped.
+//
+// If any plugin's engineRequirement is not satisfied by the running engine
+// version, Discover registers nothing and returns an error joining every
+// incompatibility. Returns the number of newly discovered plugins.
 func (m *Manager) Discover() (int, error) {
 	var all []PluginMeta
 	for _, dir := range m.config.PluginDirs {
@@ -150,6 +166,18 @@ func (m *Manager) Discover() (int, error) {
 			return 0, fmt.Errorf("scan %s: %w", dir, err)
 		}
 		all = append(all, metas...)
+	}
+
+	// Reject the whole discovery up front if any plugin is incompatible with
+	// the engine, so the caller can fix the metadata and retry cleanly.
+	var incompatible []error
+	for _, meta := range all {
+		if err := checkEngineCompatibility(meta); err != nil {
+			incompatible = append(incompatible, err)
+		}
+	}
+	if len(incompatible) > 0 {
+		return 0, errors.Join(incompatible...)
 	}
 
 	m.mu.Lock()
@@ -164,7 +192,7 @@ func (m *Manager) Discover() (int, error) {
 			Meta:      meta,
 			PluginDir: meta.pluginDir,
 			State:     StateUnloaded,
-			doneCh:    make(chan struct{}),
+			stopCh:    make(chan struct{}),
 		}
 		count++
 	}
@@ -187,18 +215,36 @@ func (m *Manager) Load(pluginID string) error {
 		return fmt.Errorf("%w: cannot load from %s", ErrInvalidStateTransition, pi.State)
 	}
 
+	// Wait for any prior crash monitor to exit before resetting per-lifecycle
+	// state, so a restart never races a stale monitor or client.
+	pi.monitorWG.Wait()
+
+	// Clean up the previous lifecycle's client, if any.
+	if pi.client != nil {
+		pi.client.Kill()
+		pi.client = nil
+	}
+	pi.rpcClient = nil
+
 	cmdName := pi.Meta.CmdName
 	if cmdName == "" {
 		cmdName = pi.Meta.ID
 	}
 	execPath := filepath.Join(pi.PluginDir, cmdName)
 
+	var cmd *exec.Cmd
+	if m.config.Command != nil {
+		cmd = m.config.Command(execPath)
+	} else {
+		cmd = exec.Command(execPath)
+	}
+
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
 			lifecyclePluginName: &lifecyclePlugin{hostRPC: &hostRPCAdapter{manager: m}},
 		},
-		Cmd:        exec.Command(execPath),
+		Cmd:        cmd,
 		Managed:    true,
 		SyncStdout: os.Stdout,
 		SyncStderr: os.Stderr,
@@ -280,12 +326,17 @@ func (m *Manager) Start(pluginID string) error {
 		return fmt.Errorf("%w: cannot start from %s", ErrInvalidStateTransition, pi.State)
 	}
 
-	if err := pi.rpcClient.Start(StartArgs{}); err != nil {
+	first := !pi.started
+	if err := pi.rpcClient.Start(StartArgs{First: first}); err != nil {
 		pi.TransitionTo(StateError, fmt.Errorf("start rpc: %w", err))
 		return fmt.Errorf("start plugin %s: %w", pluginID, err)
 	}
+	pi.started = true
 
-	// Monitor for unexpected exits.
+	// Recreate the monitor signal for this run and start crash monitoring.
+	pi.stopCh = make(chan struct{})
+	pi.stopOnce = sync.Once{}
+	pi.monitorWG.Add(1)
 	go m.monitor(pi)
 
 	if err := pi.TransitionTo(StateRunning, nil); err != nil {
@@ -308,9 +359,10 @@ func (m *Manager) Stop(pluginID string) error {
 		return fmt.Errorf("%w: cannot stop from %s", ErrInvalidStateTransition, pi.State)
 	}
 
-	// Tell the crash monitor this exit is expected so it does not report the
-	// subsequent process termination as a crash.
+	// Tell the crash monitor this exit is expected and wait for it to finish so
+	// it cannot report the termination as a crash or race a later restart.
 	pi.signalStop()
+	pi.monitorWG.Wait()
 
 	// Attempt graceful stop via RPC if the plugin is initialized or running.
 	if pi.rpcClient != nil && (pi.State == StateInitialized || pi.State == StateRunning) {
@@ -382,8 +434,10 @@ func (m *Manager) ListPlugins() []*PluginInstance {
 // =========================================================================
 
 // monitor polls a running plugin for unexpected exit. It exits when the
-// plugin is stopped intentionally (doneCh) or the manager shuts down.
+// plugin is stopped intentionally (stopCh) or the manager shuts down.
 func (m *Manager) monitor(pi *PluginInstance) {
+	defer pi.monitorWG.Done()
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -396,7 +450,7 @@ func (m *Manager) monitor(pi *PluginInstance) {
 					fmt.Errorf("%w: process terminated", ErrPluginCrashed))
 				return
 			}
-		case <-pi.doneCh:
+		case <-pi.stopCh:
 			return
 		case <-m.shutdownCh:
 			return

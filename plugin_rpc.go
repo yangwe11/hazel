@@ -40,8 +40,8 @@ type InitializeArgs struct {
 
 // StartArgs carries parameters for Start.
 type StartArgs struct {
-	// First is true on the process's first start. Reserved for restart support;
-	// the host currently starts each plugin exactly once.
+	// First is true on the plugin's first successful start in this host
+	// session, and false on every restart that follows a Stop or crash.
 	First bool
 }
 

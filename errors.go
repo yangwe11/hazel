@@ -16,6 +16,10 @@ var (
 	// the version constraint declared by the dependent plugin.
 	ErrVersionMismatch = errors.New("plugin version constraint not satisfied")
 
+	// ErrEngineMismatch indicates a plugin's engineRequirement is not satisfied
+	// by the running engine version.
+	ErrEngineMismatch = errors.New("plugin requires a different engine version")
+
 	// ErrInvalidStateTransition indicates an operation would move a plugin
 	// through an invalid lifecycle transition.
 	ErrInvalidStateTransition = errors.New("invalid plugin state transition")
