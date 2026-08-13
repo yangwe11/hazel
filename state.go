@@ -20,9 +20,10 @@ const (
 	// StateRunning means Start() has been called and the plugin is
 	// fully operational.
 	StateRunning
-	// StateStopped means the plugin was stopped cleanly.
+	// StateStopped means the plugin was stopped cleanly. It can be reloaded
+	// to restart.
 	StateStopped
-	// StateError is a terminal state indicating a failure.
+	// StateError indicates a failure. It can be reloaded to recover.
 	StateError
 )
 
@@ -52,8 +53,8 @@ var allowedTransitions = map[PluginState]map[PluginState]bool{
 	StateLoaded:      {StateInitialized: true, StateError: true, StateStopped: true},
 	StateInitialized: {StateRunning: true, StateStopped: true, StateError: true},
 	StateRunning:     {StateStopped: true, StateError: true},
-	StateStopped:     {},
-	StateError:       {},
+	StateStopped:     {StateLoaded: true},
+	StateError:       {StateLoaded: true},
 }
 
 // CanTransition reports whether moving from current to next is a valid
