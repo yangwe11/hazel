@@ -18,7 +18,10 @@ var HandshakeConfig = plugin.HandshakeConfig{
 	MagicCookieValue: "hazel",
 }
 
-const lifecyclePluginName = "lifecycle"
+const (
+	lifecyclePluginName = "lifecycle"
+	eventPluginName     = "event"
+)
 
 // Serve is the plugin entry point. Plugin authors call it from main(), passing
 // a type that implements Lifecycle:
@@ -30,10 +33,15 @@ const lifecyclePluginName = "lifecycle"
 // Serve performs the go-plugin handshake and blocks serving RPC until the host
 // disconnects. It never returns.
 func Serve(impl Lifecycle) {
+	// One shared event bus serves both the lifecycle plugin (which injects it
+	// into EventAware plugins) and the event plugin (which receives events).
+	bus := &pluginEventBus{handlers: make(map[string]pluginHandler)}
+
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			lifecyclePluginName: &lifecyclePlugin{impl: impl},
+			lifecyclePluginName: &lifecyclePlugin{impl: impl, eventBus: bus},
+			eventPluginName:     &eventPlugin{bus: bus},
 		},
 		// GRPCServer is nil, so hazel uses go-plugin's default net/rpc transport.
 	})

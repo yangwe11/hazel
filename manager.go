@@ -56,8 +56,9 @@ type PluginInstance struct {
 	State     PluginState
 
 	// go-plugin internals (set during Load)
-	client    *plugin.Client
-	rpcClient Lifecycle
+	client          *plugin.Client
+	lifecycleClient Lifecycle
+	eventClient     *eventRPC // host-side event delivery client (set during Initialize)
 
 	// started is true once Start has succeeded at least once; it drives
 	// StartArgs.First across restarts.
@@ -66,6 +67,9 @@ type PluginInstance struct {
 	stateMu   sync.Mutex
 	changedAt time.Time
 	listeners []chan StateChange
+	// onTransition, when set, is invoked after every state change. The manager
+	// uses it to publish lifecycle events and clean up event subscriptions.
+	onTransition func(StateChange)
 
 	// stopCh is closed to tell the crash monitor a shutdown is expected. It is
 	// recreated on each Start and closed by Stop.
@@ -104,7 +108,9 @@ func (pi *PluginInstance) TransitionTo(target PluginState, cause error) error {
 		default:
 		}
 	}
-
+	if pi.onTransition != nil {
+		pi.onTransition(change)
+	}
 	return nil
 }
 
@@ -132,6 +138,8 @@ type Manager struct {
 	mu      sync.RWMutex
 	plugins map[string]*PluginInstance
 
+	events *eventBus // routes events between plugins and the host
+
 	log        *log.Logger
 	shutdownCh chan struct{}
 }
@@ -139,12 +147,20 @@ type Manager struct {
 // NewManager creates a Manager. Plugins are registered via Discover before
 // their lifecycle is driven.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
-	return &Manager{
+	m := &Manager{
 		config:     cfg,
 		plugins:    make(map[string]*PluginInstance),
 		log:        log.New(os.Stdout, "[hazel] ", log.LstdFlags),
 		shutdownCh: make(chan struct{}),
-	}, nil
+	}
+	m.events = newEventBus(m.log)
+	return m, nil
+}
+
+// Events returns the manager's event bus, which host code uses to publish
+// events and subscribe to plugin and application events.
+func (m *Manager) Events() EventBus {
+	return m.events
 }
 
 // =========================================================================
@@ -206,10 +222,11 @@ func (m *Manager) Discover() (int, error) {
 			continue
 		}
 		m.plugins[meta.ID] = &PluginInstance{
-			Meta:      meta,
-			PluginDir: meta.pluginDir,
-			State:     StateUnloaded,
-			stopCh:    make(chan struct{}),
+			Meta:         meta,
+			PluginDir:    meta.pluginDir,
+			State:        StateUnloaded,
+			stopCh:       make(chan struct{}),
+			onTransition: m.onPluginTransition,
 		}
 		count++
 	}
@@ -241,7 +258,8 @@ func (m *Manager) Load(pluginID string) error {
 		pi.client.Kill()
 		pi.client = nil
 	}
-	pi.rpcClient = nil
+	pi.lifecycleClient = nil
+	pi.eventClient = nil
 
 	cmdName := pi.Meta.CmdName
 	if cmdName == "" {
@@ -259,7 +277,8 @@ func (m *Manager) Load(pluginID string) error {
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			lifecyclePluginName: &lifecyclePlugin{hostRPC: &hostRPCAdapter{manager: m}},
+			lifecyclePluginName: &lifecyclePlugin{hostRPC: &hostRPCAdapter{manager: m, pluginID: pluginID}},
+			eventPluginName:     &eventPlugin{},
 		},
 		Cmd:        cmd,
 		Managed:    true,
@@ -310,14 +329,25 @@ func (m *Manager) Initialize(pluginID string) error {
 		pi.TransitionTo(StateError, fmt.Errorf("dispense: %w", err))
 		return fmt.Errorf("dispense plugin %s: %w", pluginID, err)
 	}
-	pi.rpcClient = dispensed.(Lifecycle)
+	pi.lifecycleClient = dispensed.(Lifecycle)
+
+	// Dispense the event delivery client and register it with the event bus
+	// before Initialize, since the plugin may subscribe during Initialize.
+	eventDispensed, err := protocol.Dispense(eventPluginName)
+	if err != nil {
+		pi.client.Kill()
+		pi.TransitionTo(StateError, fmt.Errorf("dispense event: %w", err))
+		return fmt.Errorf("dispense event plugin %s: %w", pluginID, err)
+	}
+	pi.eventClient = eventDispensed.(*eventRPC)
+	m.events.registerPlugin(pluginID, pi.eventClient.Deliver)
 
 	// Initialize the plugin, passing host configuration and the host's RPC
 	// endpoint so the plugin can call back to the host.
 	args := InitializeArgs{
 		Config: nil, // reserved for future use
 	}
-	if err := pi.rpcClient.Initialize(args); err != nil {
+	if err := pi.lifecycleClient.Initialize(args); err != nil {
 		pi.client.Kill()
 		pi.TransitionTo(StateError, fmt.Errorf("initialize rpc: %w", err))
 		return fmt.Errorf("initialize plugin %s: %w", pluginID, err)
@@ -344,7 +374,7 @@ func (m *Manager) Start(pluginID string) error {
 	}
 
 	first := !pi.started
-	if err := pi.rpcClient.Start(StartArgs{First: first}); err != nil {
+	if err := pi.lifecycleClient.Start(StartArgs{First: first}); err != nil {
 		pi.TransitionTo(StateError, fmt.Errorf("start rpc: %w", err))
 		return fmt.Errorf("start plugin %s: %w", pluginID, err)
 	}
@@ -382,10 +412,10 @@ func (m *Manager) Stop(pluginID string) error {
 	pi.monitorWG.Wait()
 
 	// Attempt graceful stop via RPC if the plugin is initialized or running.
-	if pi.rpcClient != nil && (pi.State == StateInitialized || pi.State == StateRunning) {
+	if pi.lifecycleClient != nil && (pi.State == StateInitialized || pi.State == StateRunning) {
 		done := make(chan error, 1)
 		go func() {
-			done <- pi.rpcClient.Stop()
+			done <- pi.lifecycleClient.Stop()
 		}()
 
 		select {
@@ -450,6 +480,31 @@ func (m *Manager) ListPlugins() []*PluginInstance {
 // Internal helpers
 // =========================================================================
 
+// onPluginTransition reacts to a plugin's state change by publishing a
+// "plugin.<state>" event and, on terminal states, dropping the plugin's event
+// subscriptions and delivery worker.
+func (m *Manager) onPluginTransition(change StateChange) {
+	le := LifecycleEvent{
+		PluginID: change.PluginID,
+		From:     change.From.String(),
+		To:       change.To.String(),
+	}
+	if change.Err != nil {
+		le.Err = change.Err.Error()
+	}
+
+	m.events.publish(Event{
+		Name:    "plugin." + change.To.String(),
+		Source:  change.PluginID,
+		Payload: le,
+		Time:    change.Time,
+	})
+
+	if change.To == StateStopped || change.To == StateError {
+		m.events.unregisterPlugin(change.PluginID)
+	}
+}
+
 // monitor polls a running plugin for unexpected exit. It exits when the
 // plugin is stopped intentionally (stopCh) or the manager shuts down.
 func (m *Manager) monitor(pi *PluginInstance) {
@@ -497,6 +552,9 @@ func (m *Manager) Shutdown() error {
 			}
 		}
 	}
+
+	// Stop all event delivery workers and clear subscriptions.
+	m.events.close()
 
 	return nil
 }

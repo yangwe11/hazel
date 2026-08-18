@@ -36,4 +36,8 @@ var (
 
 	// ErrPluginNotFound indicates an operation referenced an unregistered ID.
 	ErrPluginNotFound = errors.New("plugin not found in registry")
+
+	// ErrSubscriptionNotFound indicates an event subscription ID was not found
+	// or does not belong to the caller.
+	ErrSubscriptionNotFound = errors.New("event subscription not found")
 )
