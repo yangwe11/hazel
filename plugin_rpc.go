@@ -32,9 +32,9 @@ type InitializeArgs struct {
 	// Config holds plugin-specific configuration provided by the host.
 	Config map[string]any
 
-	// HostServer is the mux-broker ID of the host's HostRPC server. The host
+	// HostServer is the mux-broker ID of the host's hostRPC server. The host
 	// sets it before calling Initialize; the plugin dials it to obtain a
-	// HostRPC client. Plugins do not need to read this field directly.
+	// hostRPC client. Plugins do not need to read this field directly.
 	HostServer uint32
 }
 
@@ -55,17 +55,17 @@ type Empty struct{}
 // lifecycleRPC implements Lifecycle in the host process by translating each
 // method into an rpc.Call on the plugin's connection.
 type lifecycleRPC struct {
-	client  *rpc.Client
-	broker  *plugin.MuxBroker
-	hostRPC HostRPC // served back to the plugin during Initialize
+	client *rpc.Client
+	broker *plugin.MuxBroker
+	host   hostRPC // served back to the plugin during Initialize
 }
 
 func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
-	// Allocate a broker ID and serve the host's HostRPC implementation so the
+	// Allocate a broker ID and serve the host's hostRPC implementation so the
 	// plugin can dial back to the host during its own Initialize.
 	brokerID := c.broker.NextId()
 	args.HostServer = brokerID
-	go c.broker.AcceptAndServe(brokerID, c.hostRPC)
+	go c.broker.AcceptAndServe(brokerID, c.host)
 
 	reply := Empty{}
 	return c.client.Call("Plugin.Initialize", args, &reply)
@@ -93,7 +93,7 @@ type lifecycleRPCServer struct {
 	eventBus *pluginEventBus
 }
 
-// Initialize dials the host's HostRPC server over the mux broker, injects it
+// Initialize dials the host's hostRPC server over the mux broker, injects it
 // into HostAware plugins, gives EventAware plugins the event bus, then
 // delegates to the implementation.
 func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
@@ -102,9 +102,9 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 		return err
 	}
 
-	hostClient := &HostRPCClient{client: rpc.NewClient(conn)}
+	hostClient := &hostRPCClient{client: rpc.NewClient(conn)}
 	if ha, ok := s.impl.(HostAware); ok {
-		ha.SetHostRPC(hostClient)
+		ha.SetHost(&hostFacade{hostClient: hostClient})
 	}
 	if s.eventBus != nil {
 		s.eventBus.host = hostClient
@@ -128,7 +128,7 @@ func (s *lifecycleRPCServer) Stop(_ *Empty, _ *Empty) error {
 // between the host and plugin processes.
 type lifecyclePlugin struct {
 	impl     Lifecycle       // plugin side: the implementation to serve
-	hostRPC  HostRPC         // host side: what to expose to the plugin
+	host     hostRPC         // host side: what to expose to the plugin
 	eventBus *pluginEventBus // plugin side: shared with the event plugin
 }
 
@@ -139,7 +139,7 @@ func (p *lifecyclePlugin) Server(broker *plugin.MuxBroker) (interface{}, error) 
 
 // Client runs on the HOST side.
 func (p *lifecyclePlugin) Client(broker *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
-	return &lifecycleRPC{client: client, broker: broker, hostRPC: p.hostRPC}, nil
+	return &lifecycleRPC{client: client, broker: broker, host: p.host}, nil
 }
 
 // =========================================================================

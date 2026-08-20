@@ -277,7 +277,7 @@ func (m *Manager) Load(pluginID string) error {
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
 		Plugins: map[string]plugin.Plugin{
-			lifecyclePluginName: &lifecyclePlugin{hostRPC: &hostRPCAdapter{manager: m, pluginID: pluginID}},
+			lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{manager: m, pluginID: pluginID}},
 			eventPluginName:     &eventPlugin{},
 		},
 		Cmd:        cmd,

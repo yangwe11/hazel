@@ -49,7 +49,7 @@ func init() {
 }
 
 // EventBus is the event API exposed to plugins. Plugins opt in by
-// implementing EventAware, mirroring how HostAware exposes HostRPC.
+// implementing EventAware, mirroring how HostAware exposes Host.
 type EventBus interface {
 	// Publish sends an event to every subscriber whose pattern matches Name.
 	Publish(event Event) error
@@ -61,6 +61,12 @@ type EventBus interface {
 
 	// Unsubscribe removes the subscription with the given ID.
 	Unsubscribe(id string) error
+}
+
+// EventAware is an optional interface a plugin implements to receive an
+// EventBus during Initialize.
+type EventAware interface {
+	SetEventBus(EventBus)
 }
 
 // =========================================================================
@@ -271,9 +277,9 @@ func (b *eventBus) deliverLoop(pd *pluginDelivery) {
 
 // pluginEventBus implements EventBus in the plugin process. It keeps handlers
 // local (they never cross the process boundary) and forwards publish,
-// subscribe, and unsubscribe calls to the host over HostRPC.
+// subscribe, and unsubscribe calls to the host over hostRPC.
 type pluginEventBus struct {
-	host HostRPC // dialed during Initialize, before the plugin gets the bus
+	host hostRPC // dialed during Initialize, before the plugin gets the bus
 
 	mu       sync.RWMutex
 	handlers map[string]pluginHandler // subscription ID → {pattern, handler}
