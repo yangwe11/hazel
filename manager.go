@@ -274,17 +274,23 @@ func (m *Manager) Load(pluginID string) error {
 		cmd = exec.Command(execPath)
 	}
 
+	plugins := map[string]plugin.Plugin{
+		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{manager: m, pluginID: pluginID}, manager: m},
+		eventPluginName:     &eventPlugin{},
+	}
+	// Merge registered plugin services (host→plugin extensions).
+	for name, p := range pluginServiceSnapshot() {
+		plugins[name] = p
+	}
+
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig: HandshakeConfig,
-		Plugins: map[string]plugin.Plugin{
-			lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{manager: m, pluginID: pluginID}},
-			eventPluginName:     &eventPlugin{},
-		},
-		Cmd:        cmd,
-		Managed:    true,
-		SyncStdout: os.Stdout,
-		SyncStderr: os.Stderr,
-		Logger:     hclog.NewNullLogger(),
+		Plugins:         plugins,
+		Cmd:             cmd,
+		Managed:         true,
+		SyncStdout:      os.Stdout,
+		SyncStderr:      os.Stderr,
+		Logger:          hclog.NewNullLogger(),
 	})
 
 	pi.client = client
@@ -474,6 +480,26 @@ func (m *Manager) ListPlugins() []*PluginInstance {
 		result = append(result, pi)
 	}
 	return result
+}
+
+// Dispense returns a client for a registered plugin service on the given
+// plugin. The plugin must have been Initialized first. The returned value is
+// the result of the service's plugin.Plugin.Client method; the caller asserts
+// the concrete type.
+func (m *Manager) Dispense(pluginID, serviceName string) (any, error) {
+	pi, err := m.getPlugin(pluginID)
+	if err != nil {
+		return nil, err
+	}
+	if pi.client == nil {
+		return nil, fmt.Errorf("plugin %s is not loaded", pluginID)
+	}
+
+	protocol, err := pi.client.Client()
+	if err != nil {
+		return nil, fmt.Errorf("connect to plugin %s: %w", pluginID, err)
+	}
+	return protocol.Dispense(serviceName)
 }
 
 // =========================================================================

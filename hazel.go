@@ -37,12 +37,18 @@ func Serve(impl Lifecycle) {
 	// into EventAware plugins) and the event plugin (which receives events).
 	bus := &pluginEventBus{handlers: make(map[string]pluginHandler)}
 
+	plugins := map[string]plugin.Plugin{
+		lifecyclePluginName: &lifecyclePlugin{impl: impl, eventBus: bus},
+		eventPluginName:     &eventPlugin{bus: bus},
+	}
+	// Merge registered plugin services (host→plugin extensions).
+	for name, p := range pluginServiceSnapshot() {
+		plugins[name] = p
+	}
+
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: HandshakeConfig,
-		Plugins: map[string]plugin.Plugin{
-			lifecyclePluginName: &lifecyclePlugin{impl: impl, eventBus: bus},
-			eventPluginName:     &eventPlugin{bus: bus},
-		},
+		Plugins:         plugins,
 		// GRPCServer is nil, so hazel uses go-plugin's default net/rpc transport.
 	})
 }

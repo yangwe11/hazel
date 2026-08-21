@@ -36,6 +36,10 @@ type InitializeArgs struct {
 	// sets it before calling Initialize; the plugin dials it to obtain a
 	// hostRPC client. Plugins do not need to read this field directly.
 	HostServer uint32
+
+	// HostServices maps each registered host-service name to its mux-broker
+	// ID. The plugin dials each to obtain a client for that host capability.
+	HostServices map[string]uint32
 }
 
 // StartArgs carries parameters for Start.
@@ -55,9 +59,10 @@ type Empty struct{}
 // lifecycleRPC implements Lifecycle in the host process by translating each
 // method into an rpc.Call on the plugin's connection.
 type lifecycleRPC struct {
-	client *rpc.Client
-	broker *plugin.MuxBroker
-	host   hostRPC // served back to the plugin during Initialize
+	client  *rpc.Client
+	broker  *plugin.MuxBroker
+	host    hostRPC  // served back to the plugin during Initialize
+	manager *Manager // for serving registered host services
 }
 
 func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
@@ -66,6 +71,16 @@ func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
 	brokerID := c.broker.NextId()
 	args.HostServer = brokerID
 	go c.broker.AcceptAndServe(brokerID, c.host)
+
+	// Serve each registered host service (plugin→host extension) on its own
+	// broker connection and record its ID for the plugin to dial.
+	registered := hostServiceSnapshot()
+	args.HostServices = make(map[string]uint32, len(registered))
+	for _, hs := range registered {
+		id := c.broker.NextId()
+		args.HostServices[hs.Name] = id
+		go c.broker.AcceptAndServe(id, hs.Server(c.manager))
+	}
 
 	reply := Empty{}
 	return c.client.Call("Plugin.Initialize", args, &reply)
@@ -113,6 +128,22 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 		}
 	}
 
+	// Dial and inject registered host services (plugin→host extensions).
+	for _, hs := range hostServiceSnapshot() {
+		id, ok := args.HostServices[hs.Name]
+		if !ok {
+			continue
+		}
+		conn, err := s.broker.Dial(id)
+		if err != nil {
+			return err
+		}
+		client := hs.Client(rpc.NewClient(conn))
+		if hs.Inject != nil {
+			hs.Inject(s.impl, client)
+		}
+	}
+
 	return s.impl.Initialize(args)
 }
 
@@ -129,6 +160,7 @@ func (s *lifecycleRPCServer) Stop(_ *Empty, _ *Empty) error {
 type lifecyclePlugin struct {
 	impl     Lifecycle       // plugin side: the implementation to serve
 	host     hostRPC         // host side: what to expose to the plugin
+	manager  *Manager        // host side: for serving registered host services
 	eventBus *pluginEventBus // plugin side: shared with the event plugin
 }
 
@@ -139,7 +171,7 @@ func (p *lifecyclePlugin) Server(broker *plugin.MuxBroker) (interface{}, error) 
 
 // Client runs on the HOST side.
 func (p *lifecyclePlugin) Client(broker *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
-	return &lifecycleRPC{client: client, broker: broker, host: p.host}, nil
+	return &lifecycleRPC{client: client, broker: broker, host: p.host, manager: p.manager}, nil
 }
 
 // =========================================================================
