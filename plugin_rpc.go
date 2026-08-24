@@ -37,6 +37,10 @@ type InitializeArgs struct {
 	// hostRPC client. Plugins do not need to read this field directly.
 	HostServer uint32
 
+	// EventServer is the mux-broker ID of the host's built-in event bus
+	// service. The plugin dials it to obtain the event bus client.
+	EventServer uint32
+
 	// HostServices maps each registered host-service name to its mux-broker
 	// ID. The plugin dials each to obtain a client for that host capability.
 	HostServices map[string]uint32
@@ -59,10 +63,11 @@ type Empty struct{}
 // lifecycleRPC implements Lifecycle in the host process by translating each
 // method into an rpc.Call on the plugin's connection.
 type lifecycleRPC struct {
-	client  *rpc.Client
-	broker  *plugin.MuxBroker
-	host    hostRPC  // served back to the plugin during Initialize
-	manager *Manager // for serving registered host services
+	client    *rpc.Client
+	broker    *plugin.MuxBroker
+	host      hostRPC      // served back to the plugin during Initialize
+	eventHost eventHostRPC // built-in event bus host service
+	manager   *Manager     // for serving registered host services
 }
 
 func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
@@ -71,6 +76,11 @@ func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
 	brokerID := c.broker.NextId()
 	args.HostServer = brokerID
 	go c.broker.AcceptAndServe(brokerID, c.host)
+
+	// Serve the built-in event bus host service on its own connection.
+	eventID := c.broker.NextId()
+	args.EventServer = eventID
+	go c.broker.AcceptAndServe(eventID, c.eventHost)
 
 	// Serve each registered host service (plugin→host extension) on its own
 	// broker connection and record its ID for the plugin to dial.
@@ -122,7 +132,11 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 		ha.SetHost(&hostFacade{hostClient: hostClient})
 	}
 	if s.eventBus != nil {
-		s.eventBus.host = hostClient
+		eventConn, err := s.broker.Dial(args.EventServer)
+		if err != nil {
+			return err
+		}
+		s.eventBus.eventHost = &eventHostRPCClient{client: rpc.NewClient(eventConn)}
 		if ea, ok := s.impl.(EventAware); ok {
 			ea.SetEventBus(s.eventBus)
 		}
@@ -158,10 +172,11 @@ func (s *lifecycleRPCServer) Stop(_ *Empty, _ *Empty) error {
 // lifecyclePlugin implements plugin.Plugin, bridging Lifecycle over net/rpc
 // between the host and plugin processes.
 type lifecyclePlugin struct {
-	impl     Lifecycle       // plugin side: the implementation to serve
-	host     hostRPC         // host side: what to expose to the plugin
-	manager  *Manager        // host side: for serving registered host services
-	eventBus *pluginEventBus // plugin side: shared with the event plugin
+	impl      Lifecycle       // plugin side: the implementation to serve
+	host      hostRPC         // host side: what to expose to the plugin
+	eventHost eventHostRPC    // host side: built-in event bus host service
+	manager   *Manager        // host side: for serving registered host services
+	eventBus  *pluginEventBus // plugin side: shared with the event plugin
 }
 
 // Server runs on the PLUGIN side.
@@ -171,50 +186,5 @@ func (p *lifecyclePlugin) Server(broker *plugin.MuxBroker) (interface{}, error) 
 
 // Client runs on the HOST side.
 func (p *lifecyclePlugin) Client(broker *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
-	return &lifecycleRPC{client: client, broker: broker, host: p.host, manager: p.manager}, nil
-}
-
-// =========================================================================
-// Host → Plugin RPC (event delivery)
-//
-// The host delivers events to a plugin by calling Deliver on the plugin's
-// event server over the broker connection.
-// =========================================================================
-
-// eventRPC delivers events from the host to a plugin's event server over the
-// broker connection.
-type eventRPC struct {
-	client *rpc.Client
-}
-
-// Deliver sends one event to the plugin's event server.
-func (c *eventRPC) Deliver(event Event) error {
-	return c.client.Call("Plugin.Deliver", event, &Empty{})
-}
-
-// eventRPCServer receives events from the host over net/rpc and dispatches
-// them to the plugin's local handlers.
-type eventRPCServer struct {
-	bus *pluginEventBus
-}
-
-// Deliver is called by the host to push one event into the plugin process.
-func (s *eventRPCServer) Deliver(event Event, _ *Empty) error {
-	s.bus.dispatch(event)
-	return nil
-}
-
-// eventPlugin bridges event delivery over net/rpc between host and plugin.
-type eventPlugin struct {
-	bus *pluginEventBus // plugin side: where delivered events are dispatched
-}
-
-// Server runs on the PLUGIN side.
-func (p *eventPlugin) Server(_ *plugin.MuxBroker) (interface{}, error) {
-	return &eventRPCServer{bus: p.bus}, nil
-}
-
-// Client runs on the HOST side.
-func (p *eventPlugin) Client(_ *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
-	return &eventRPC{client: client}, nil
+	return &lifecycleRPC{client: client, broker: broker, host: p.host, eventHost: p.eventHost, manager: p.manager}, nil
 }

@@ -3,6 +3,9 @@ package hazel
 import (
 	"io"
 	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -128,4 +131,81 @@ func TestLifecycleEventPublished(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for lifecycle event")
 	}
+}
+
+// eventRecordingPlugin subscribes to "test.topic" and writes each received
+// event name to the file named by HAZEL_TEST_EVENTS.
+type eventRecordingPlugin struct {
+	bus EventBus
+}
+
+func (p *eventRecordingPlugin) SetEventBus(b EventBus) { p.bus = b }
+
+func (p *eventRecordingPlugin) Initialize(InitializeArgs) error {
+	_, err := p.bus.Subscribe("test.topic", func(e Event) {
+		os.WriteFile(os.Getenv("HAZEL_TEST_EVENTS"), []byte(e.Name), 0o644)
+	})
+	return err
+}
+
+func (p *eventRecordingPlugin) Start(StartArgs) error { return nil }
+func (p *eventRecordingPlugin) Stop() error           { return nil }
+
+// TestEventHelperProcess is the re-exec target for TestCrossProcessEventBus.
+func TestEventHelperProcess(t *testing.T) {
+	if os.Getenv("HAZEL_TEST_EVENT_PLUGIN") != "1" {
+		return
+	}
+	Serve(&eventRecordingPlugin{})
+}
+
+// TestCrossProcessEventBus verifies the built-in event bus still works
+// end-to-end after it moved onto its own broker connection: a plugin
+// subscribes over the event host service, and the host delivers a published
+// event back to it.
+func TestCrossProcessEventBus(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "events.txt")
+
+	cfg := DefaultManagerConfig()
+	cfg.Command = func(execPath string) *exec.Cmd {
+		cmd := exec.Command(execPath, "-test.run=TestEventHelperProcess")
+		cmd.Env = append(os.Environ(),
+			"HAZEL_TEST_EVENT_PLUGIN=1",
+			"HAZEL_TEST_EVENTS="+out,
+		)
+		return cmd
+	}
+
+	m, err := NewManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Shutdown()
+
+	registerTestPlugin(t, m, "p")
+	if err := m.Load("p"); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := m.Initialize("p"); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	if err := m.Start("p"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Publish from the host; the plugin's subscription should deliver it back.
+	if err := m.Events().Publish(Event{Name: "test.topic", Payload: "x"}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	// Delivery is asynchronous, so poll briefly for the plugin to record it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(out); err == nil && string(b) == "test.topic" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	b, _ := os.ReadFile(out)
+	t.Fatalf("plugin did not receive event, got %q", string(b))
 }

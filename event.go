@@ -4,9 +4,12 @@ import (
 	"encoding/gob"
 	"fmt"
 	"log"
+	"net/rpc"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/go-plugin"
 )
 
 // =========================================================================
@@ -272,14 +275,82 @@ func (b *eventBus) deliverLoop(pd *pluginDelivery) {
 }
 
 // =========================================================================
+// Built-in event host service (plugin→host)
+//
+// The event bus's publish/subscribe/unsubscribe methods are a separate host
+// service with its own broker connection, distinct from the core hostRPC
+// (Ping) and from externally registered HostServices.
+// =========================================================================
+
+// eventHostRPC is the wire-level surface for the built-in event bus host
+// service. Each method must follow net/rpc's signature.
+type eventHostRPC interface {
+	// Publish sends an event to every subscriber.
+	Publish(Event, *Empty) error
+
+	// Subscribe registers this plugin's interest in a topic pattern and
+	// returns a subscription ID.
+	Subscribe(pattern string, reply *string) error
+
+	// Unsubscribe removes a subscription previously created by this plugin.
+	Unsubscribe(id string, _ *Empty) error
+}
+
+// eventHostRPCClient implements eventHostRPC in the plugin process,
+// translating each call into an rpc.Call over the broker connection.
+type eventHostRPCClient struct {
+	client *rpc.Client
+}
+
+func (c *eventHostRPCClient) Publish(event Event, _ *Empty) error {
+	return c.client.Call("Plugin.Publish", event, &Empty{})
+}
+
+func (c *eventHostRPCClient) Subscribe(pattern string, reply *string) error {
+	return c.client.Call("Plugin.Subscribe", pattern, reply)
+}
+
+func (c *eventHostRPCClient) Unsubscribe(id string, _ *Empty) error {
+	return c.client.Call("Plugin.Unsubscribe", id, &Empty{})
+}
+
+// eventHostRPCServer serves the event bus host service on the host side.
+type eventHostRPCServer struct {
+	manager  *Manager
+	pluginID string // which plugin is connected
+}
+
+func (s *eventHostRPCServer) Publish(event Event, _ *Empty) error {
+	// Stamp the publisher so subscribers always know who produced the event.
+	if event.Source == "" {
+		event.Source = s.pluginID
+	}
+	s.manager.events.publish(event)
+	return nil
+}
+
+func (s *eventHostRPCServer) Subscribe(pattern string, reply *string) error {
+	id, err := s.manager.events.subscribe(s.pluginID, pattern, nil)
+	if err != nil {
+		return err
+	}
+	*reply = id
+	return nil
+}
+
+func (s *eventHostRPCServer) Unsubscribe(id string, _ *Empty) error {
+	return s.manager.events.unsubscribe(s.pluginID, id)
+}
+
+// =========================================================================
 // Plugin-side: receive events and dispatch to local handlers
 // =========================================================================
 
 // pluginEventBus implements EventBus in the plugin process. It keeps handlers
 // local (they never cross the process boundary) and forwards publish,
-// subscribe, and unsubscribe calls to the host over hostRPC.
+// subscribe, and unsubscribe calls to the host over the event host service.
 type pluginEventBus struct {
-	host hostRPC // dialed during Initialize, before the plugin gets the bus
+	eventHost eventHostRPC // dialed during Initialize, before the plugin gets the bus
 
 	mu       sync.RWMutex
 	handlers map[string]pluginHandler // subscription ID → {pattern, handler}
@@ -293,14 +364,14 @@ type pluginHandler struct {
 
 // Publish sends an event to the host, which fans it out (implements EventBus).
 func (b *pluginEventBus) Publish(event Event) error {
-	return b.host.Publish(event, &Empty{})
+	return b.eventHost.Publish(event, &Empty{})
 }
 
 // Subscribe registers a local handler and tells the host to route matching
 // events to this plugin (implements EventBus).
 func (b *pluginEventBus) Subscribe(pattern string, handler func(Event)) (string, error) {
 	var id string
-	if err := b.host.Subscribe(pattern, &id); err != nil {
+	if err := b.eventHost.Subscribe(pattern, &id); err != nil {
 		return "", err
 	}
 
@@ -313,7 +384,7 @@ func (b *pluginEventBus) Subscribe(pattern string, handler func(Event)) (string,
 // Unsubscribe removes a local handler and tells the host to stop routing
 // (implements EventBus).
 func (b *pluginEventBus) Unsubscribe(id string) error {
-	if err := b.host.Unsubscribe(id, &Empty{}); err != nil {
+	if err := b.eventHost.Unsubscribe(id, &Empty{}); err != nil {
 		return err
 	}
 
@@ -362,4 +433,49 @@ func matchTopic(pattern, name string) bool {
 		}
 	}
 	return len(pp) == len(np)
+}
+
+// =========================================================================
+// Host → Plugin RPC (event delivery)
+//
+// The host delivers events to a plugin by calling Deliver on the plugin's
+// event server over the broker connection.
+// =========================================================================
+
+// eventRPC delivers events from the host to a plugin's event server over the
+// broker connection.
+type eventRPC struct {
+	client *rpc.Client
+}
+
+// Deliver sends one event to the plugin's event server.
+func (c *eventRPC) Deliver(event Event) error {
+	return c.client.Call("Plugin.Deliver", event, &Empty{})
+}
+
+// eventRPCServer receives events from the host over net/rpc and dispatches
+// them to the plugin's local handlers.
+type eventRPCServer struct {
+	bus *pluginEventBus
+}
+
+// Deliver is called by the host to push one event into the plugin process.
+func (s *eventRPCServer) Deliver(event Event, _ *Empty) error {
+	s.bus.dispatch(event)
+	return nil
+}
+
+// eventPlugin bridges event delivery over net/rpc between host and plugin.
+type eventPlugin struct {
+	bus *pluginEventBus // plugin side: where delivered events are dispatched
+}
+
+// Server runs on the PLUGIN side.
+func (p *eventPlugin) Server(_ *plugin.MuxBroker) (interface{}, error) {
+	return &eventRPCServer{bus: p.bus}, nil
+}
+
+// Client runs on the HOST side.
+func (p *eventPlugin) Client(_ *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
+	return &eventRPC{client: client}, nil
 }

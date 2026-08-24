@@ -275,7 +275,7 @@ func (m *Manager) Load(pluginID string) error {
 	}
 
 	plugins := map[string]plugin.Plugin{
-		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{manager: m, pluginID: pluginID}, manager: m},
+		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{}, eventHost: &eventHostRPCServer{manager: m, pluginID: pluginID}, manager: m},
 		eventPluginName:     &eventPlugin{},
 	}
 	// Merge registered plugin services (host→plugin extensions).
