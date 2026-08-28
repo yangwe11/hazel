@@ -44,6 +44,10 @@ type InitializeArgs struct {
 	// HostServices maps each registered host-service name to its mux-broker
 	// ID. The plugin dials each to obtain a client for that host capability.
 	HostServices map[string]uint32
+
+	// PluginID is the plugin's unique identifier in the host (its plugin.yaml
+	// id). It populates Context.ID().
+	PluginID string
 }
 
 // StartArgs carries parameters for Start.
@@ -118,8 +122,9 @@ type lifecycleRPCServer struct {
 	eventBus *pluginEventBus
 }
 
-// Initialize dials the host's hostRPC server over the mux broker, injects it
-// into HostAware plugins, gives EventAware plugins the event bus, then
+// Initialize dials the host's hostRPC server and event bus over the mux
+// broker, assembles them into a Context, injects the Context into ContextAware
+// plugins (and each registered host service into its Aware interface), then
 // delegates to the implementation.
 func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 	conn, err := s.broker.Dial(args.HostServer)
@@ -127,19 +132,26 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 		return err
 	}
 
-	hostClient := &hostRPCClient{client: rpc.NewClient(conn)}
-	if ha, ok := s.impl.(HostAware); ok {
-		ha.SetHost(&hostFacade{hostClient: hostClient})
-	}
+	host := &hostFacade{hostClient: &hostRPCClient{client: rpc.NewClient(conn)}}
+
+	// Dial the event bus host service and bind it to the shared plugin bus.
+	var bus EventBus
 	if s.eventBus != nil {
 		eventConn, err := s.broker.Dial(args.EventServer)
 		if err != nil {
 			return err
 		}
 		s.eventBus.eventHost = &eventHostRPCClient{client: rpc.NewClient(eventConn)}
-		if ea, ok := s.impl.(EventAware); ok {
-			ea.SetEventBus(s.eventBus)
-		}
+		bus = s.eventBus
+	}
+
+	// Inject the assembled Context into ContextAware plugins.
+	if ca, ok := s.impl.(ContextAware); ok {
+		ca.SetContext(&pluginContext{
+			id:   args.PluginID,
+			host: host,
+			bus:  bus,
+		})
 	}
 
 	// Dial and inject registered host services (plugin→host extensions).

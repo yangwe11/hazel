@@ -351,7 +351,8 @@ func (m *Manager) Initialize(pluginID string) error {
 	// Initialize the plugin, passing host configuration and the host's RPC
 	// endpoint so the plugin can call back to the host.
 	args := InitializeArgs{
-		Config: nil, // reserved for future use
+		Config:   nil, // reserved for future use
+		PluginID: pluginID,
 	}
 	if err := pi.lifecycleClient.Initialize(args); err != nil {
 		pi.client.Kill()

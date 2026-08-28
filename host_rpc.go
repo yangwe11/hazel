@@ -7,23 +7,16 @@ import "net/rpc"
 //
 // The host exposes a hostRPC server to every plugin over go-plugin's mux
 // broker (no separate TCP listener). The wire-level hostRPC surface is hidden
-// behind the concise Host interface; a plugin opts in by implementing
-// HostAware to receive a Host during Initialize.
+// behind the concise Host interface (reached by a plugin via Context.Host()).
 //
 // The event bus is a separate built-in host service with its own broker
 // connection (see event.go); it is not part of hostRPC.
 // =========================================================================
 
 // Host is the concise host API exposed to plugins. New capabilities grow this
-// interface. Plugins opt in via HostAware.
+// interface (health, discovery, admin queries).
 type Host interface {
 	Ping() error
-}
-
-// HostAware is an optional interface a plugin may implement to receive a
-// Host during Initialize.
-type HostAware interface {
-	SetHost(Host)
 }
 
 // hostRPC is the wire-level RPC surface for the core host capability. Each

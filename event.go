@@ -51,8 +51,8 @@ func init() {
 	gob.Register(LifecycleEvent{})
 }
 
-// EventBus is the event API exposed to plugins. Plugins opt in by
-// implementing EventAware, mirroring how HostAware exposes Host.
+// EventBus is the event API exposed to plugins (and host code). Plugins reach it
+// via Context.Bus(). Host code uses Manager.Events().
 type EventBus interface {
 	// Publish sends an event to every subscriber whose pattern matches Name.
 	Publish(event Event) error
@@ -64,12 +64,6 @@ type EventBus interface {
 
 	// Unsubscribe removes the subscription with the given ID.
 	Unsubscribe(id string) error
-}
-
-// EventAware is an optional interface a plugin implements to receive an
-// EventBus during Initialize.
-type EventAware interface {
-	SetEventBus(EventBus)
 }
 
 // =========================================================================

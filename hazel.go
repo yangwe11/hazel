@@ -34,7 +34,7 @@ const (
 // disconnects. It never returns.
 func Serve(impl Lifecycle) {
 	// One shared event bus serves both the lifecycle plugin (which injects it
-	// into EventAware plugins) and the event plugin (which receives events).
+	// via the Context Bus) and the event plugin (which receives events).
 	bus := &pluginEventBus{handlers: make(map[string]pluginHandler)}
 
 	plugins := map[string]plugin.Plugin{

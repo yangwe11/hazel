@@ -133,13 +133,13 @@ func TestLifecycleEventPublished(t *testing.T) {
 	}
 }
 
-// eventRecordingPlugin subscribes to "test.topic" and writes each received
-// event name to the file named by HAZEL_TEST_EVENTS.
+// eventRecordingPlugin subscribes to "test.topic" via its Context and writes 
+// each received event name to the file named by HAZEL_TEST_EVENTS.
 type eventRecordingPlugin struct {
 	bus EventBus
 }
 
-func (p *eventRecordingPlugin) SetEventBus(b EventBus) { p.bus = b }
+func (p *eventRecordingPlugin) SetContext(ctx Context) { p.bus = ctx.Bus() }
 
 func (p *eventRecordingPlugin) Initialize(InitializeArgs) error {
 	_, err := p.bus.Subscribe("test.topic", func(e Event) {
