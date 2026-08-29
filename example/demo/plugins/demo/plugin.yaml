@@ -1,0 +1,6 @@
+id: demo
+name: Demo
+version: 1.0.0
+type: NATIVE
+cmdName: demo
+description: Runnable hazel demo plugin.
