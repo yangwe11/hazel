@@ -20,6 +20,10 @@ type Context interface {
 	// Bus is the host's event bus: publish events and subscribe to topic
 	// patterns. Equivalent to the former standalone EventBus.
 	Bus() EventBus
+
+	// Config is the plugin's configuration provided by the host, JSON-encoded
+	// (nil when none). Decode it with json.Unmarshal.
+	Config() []byte
 }
 
 // ContextAware is the optional interface a plugin implements to receive its
@@ -29,9 +33,10 @@ type ContextAware interface {
 }
 
 type pluginContext struct {
-	id   string
-	host Host
-	bus  EventBus
+	id     string
+	host   Host
+	bus    EventBus
+	config []byte
 }
 
 func (c *pluginContext) ID() string {
@@ -44,4 +49,8 @@ func (c *pluginContext) Host() Host {
 
 func (c *pluginContext) Bus() EventBus {
 	return c.bus
+}
+
+func (c *pluginContext) Config() []byte {
+	return c.config
 }

@@ -29,8 +29,10 @@ type Lifecycle interface {
 
 // InitializeArgs carries initialization data from the host to the plugin.
 type InitializeArgs struct {
-	// Config holds plugin-specific configuration provided by the host.
-	Config map[string]any
+	// Config is the plugin's configuration provided by the host, JSON-encoded
+	// (nil when the host supplies none). Decode it with json.Unmarshal, or read
+	// the same bytes via Context.Config().
+	Config []byte
 
 	// HostServer is the mux-broker ID of the host's hostRPC server. The host
 	// sets it before calling Initialize; the plugin dials it to obtain a
@@ -148,9 +150,10 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 	// Inject the assembled Context into ContextAware plugins.
 	if ca, ok := s.impl.(ContextAware); ok {
 		ca.SetContext(&pluginContext{
-			id:   args.PluginID,
-			host: host,
-			bus:  bus,
+			id:     args.PluginID,
+			host:   host,
+			bus:    bus,
+			config: args.Config,
 		})
 	}
 

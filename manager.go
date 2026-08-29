@@ -1,6 +1,7 @@
 package hazel
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -37,6 +38,11 @@ type ManagerConfig struct {
 	// extra flags or environment variables. If nil, the binary at execPath is
 	// executed directly.
 	Command func(execPath string) *exec.Cmd
+
+	// Config returns the JSON-marshalable configuration for a plugin, keyed by
+	// plugin ID. It is called during Initialize; return (nil, nil) for plugins
+	// with no configuration. If Config is nil, no plugin receives configuration.
+	Config func(pluginID string) (any, error)
 }
 
 // DefaultManagerConfig returns a ManagerConfig with sensible defaults.
@@ -349,10 +355,24 @@ func (m *Manager) Initialize(pluginID string) error {
 	m.events.registerPlugin(pluginID, pi.eventClient.Deliver)
 
 	// Initialize the plugin, passing host configuration and the host's RPC
-	// endpoint so the plugin can call back to the host.
-	args := InitializeArgs{
-		Config:   nil, // reserved for future use
-		PluginID: pluginID,
+	// endpoints so the plugin can call back to the host.
+	args := InitializeArgs{PluginID: pluginID}
+	if m.config.Config != nil {
+		cfg, err := m.config.Config(pluginID)
+		if err != nil {
+			pi.client.Kill()
+			pi.TransitionTo(StateError, fmt.Errorf("load config: %w", err))
+			return fmt.Errorf("load config for plugin %s: %w", pluginID, err)
+		}
+		if cfg != nil {
+			data, err := json.Marshal(cfg)
+			if err != nil {
+				pi.client.Kill()
+				pi.TransitionTo(StateError, fmt.Errorf("encode config: %w", err))
+				return fmt.Errorf("encode config for plugin %s: %w", pluginID, err)
+			}
+			args.Config = data
+		}
 	}
 	if err := pi.lifecycleClient.Initialize(args); err != nil {
 		pi.client.Kill()
