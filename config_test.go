@@ -120,3 +120,80 @@ func TestConfigPushDown(t *testing.T) {
 	b2, _ := os.ReadFile(updOut)
 	t.Fatalf("plugin did not receive config update, got %q", string(b2))
 }
+
+// envPlugin writes its Context.Environment() (JSON-encoded) to the file named
+// by HAZEL_TEST_INFO during Initialize.
+type envPlugin struct {
+	ctx Context
+}
+
+func (p *envPlugin) SetContext(ctx Context) { p.ctx = ctx }
+
+func (p *envPlugin) Initialize(InitializeArgs) error {
+	data, err := json.Marshal(p.ctx.Environment())
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(os.Getenv("HAZEL_TEST_INFO"), data, 0o644)
+}
+
+func (p *envPlugin) Start(StartArgs) error { return nil }
+func (p *envPlugin) Stop() error           { return nil }
+
+// TestEnvironmentHelperProcess is the re-exec target for TestEnvironmentPushDown.
+func TestEnvironmentHelperProcess(t *testing.T) {
+	if os.Getenv("HAZEL_TEST_INFO_PLUGIN") != "1" {
+		return
+	}
+	Serve(&envPlugin{})
+}
+
+// TestEnvironmentPushDown verifies that shared host facts (engine version, data
+// directory, and host-defined attributes) reach a plugin via Context.Environment().
+func TestEnvironmentPushDown(t *testing.T) {
+	infoOut := filepath.Join(t.TempDir(), "info.json")
+
+	cfg := DefaultManagerConfig()
+	cfg.DataDir = filepath.Join(t.TempDir(), "data")
+	cfg.Attributes = map[string]string{"environment": "staging"}
+	cfg.Command = func(execPath string) *exec.Cmd {
+		cmd := exec.Command(execPath, "-test.run=TestEnvironmentHelperProcess")
+		cmd.Env = append(os.Environ(),
+			"HAZEL_TEST_INFO_PLUGIN=1",
+			"HAZEL_TEST_INFO="+infoOut,
+		)
+		return cmd
+	}
+
+	m, err := NewManager(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Shutdown()
+
+	registerTestPlugin(t, m, "p")
+	if err := m.Load("p"); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if err := m.Initialize("p"); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+
+	b, err := os.ReadFile(infoOut)
+	if err != nil {
+		t.Fatalf("read info: %v", err)
+	}
+	var env Environment
+	if err := json.Unmarshal(b, &env); err != nil {
+		t.Fatalf("unmarshal info: %v", err)
+	}
+	if env.EngineVersion != EngineVersion {
+		t.Errorf("EngineVersion = %q, want %q", env.EngineVersion, EngineVersion)
+	}
+	if env.DataDir != cfg.DataDir {
+		t.Errorf("DataDir = %q, want %q", env.DataDir, cfg.DataDir)
+	}
+	if env.Attributes["environment"] != "staging" {
+		t.Errorf("Attributes = %v, want environment=staging", env.Attributes)
+	}
+}

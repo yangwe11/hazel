@@ -1,5 +1,28 @@
 package hazel
 
+// Environment describes the host process and its environment. The host fills it
+// in and passes it to every plugin during Initialize; a plugin reads it via
+// Context.Environment().
+//
+// Environment is host→plugin, read-only data, distinct from Config: Config is
+// per-plugin and JSON-shaped (arbitrary nesting), while Environment is shared
+// scalar facts every plugin sees identically.
+type Environment struct {
+	// EngineVersion is the running engine's version (hazel.EngineVersion).
+	// It is passed at runtime rather than read from the plugin's own compile,
+	// so a plugin can detect when it was built against a different engine.
+	EngineVersion string
+
+	// DataDir is the manager's data directory, where plugins may persist
+	// state. Empty when ManagerConfig.DataDir is unset.
+	DataDir string
+
+	// Attributes holds host-defined, shared scalar facts (for example
+	// "environment=staging"). Keys and values are strings; richer or nested
+	// data belongs in the plugin's Config instead.
+	Attributes map[string]string
+}
+
 // Context is the single session handle the host injects into a plugin. The
 // plugin receives it during Initialize by implementing ContextAware.
 //
@@ -24,6 +47,10 @@ type Context interface {
 	// Config is the plugin's configuration provided by the host, JSON-encoded
 	// (nil when none). Decode it with json.Unmarshal.
 	Config() []byte
+
+	// Environment describes the host process and its environment (engine
+	// version, data directory, and host-defined attributes).
+	Environment() Environment
 }
 
 // ContextAware is the optional interface a plugin implements to receive its
@@ -37,6 +64,7 @@ type pluginContext struct {
 	host   Host
 	bus    EventBus
 	config []byte
+	env    Environment
 }
 
 func (c *pluginContext) ID() string {
@@ -53,4 +81,8 @@ func (c *pluginContext) Bus() EventBus {
 
 func (c *pluginContext) Config() []byte {
 	return c.config
+}
+
+func (c *pluginContext) Environment() Environment {
+	return c.env
 }

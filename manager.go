@@ -43,6 +43,10 @@ type ManagerConfig struct {
 	// plugin ID. It is called during Initialize; return (nil, nil) for plugins
 	// with no configuration. If Config is nil, no plugin receives configuration.
 	Config func(pluginID string) (any, error)
+
+	// Attributes holds host-defined scalar facts (environment, region, etc.)
+	// shared with every plugin via Context.Environment(). Keys and values are strings.
+	Attributes map[string]string
 }
 
 // DefaultManagerConfig returns a ManagerConfig with sensible defaults.
@@ -356,7 +360,14 @@ func (m *Manager) Initialize(pluginID string) error {
 
 	// Initialize the plugin, passing host configuration and the host's RPC
 	// endpoints so the plugin can call back to the host.
-	args := InitializeArgs{PluginID: pluginID}
+	args := InitializeArgs{
+		PluginID: pluginID,
+		Environment: Environment{
+			EngineVersion: EngineVersion,
+			DataDir:       m.config.DataDir,
+			Attributes:    m.config.Attributes,
+		},
+	}
 	if m.config.Config != nil {
 		cfg, err := m.config.Config(pluginID)
 		if err != nil {

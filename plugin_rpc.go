@@ -34,6 +34,11 @@ type InitializeArgs struct {
 	// the same bytes via Context.Config().
 	Config []byte
 
+	// Environment describes the host process and its environment (engine
+	// version, data directory, host-defined attributes). Read it via
+	// Context.Environment().
+	Environment Environment
+
 	// HostServer is the mux-broker ID of the host's hostRPC server. The host
 	// sets it before calling Initialize; the plugin dials it to obtain a
 	// hostRPC client. Plugins do not need to read this field directly.
@@ -154,6 +159,7 @@ func (s *lifecycleRPCServer) Initialize(args InitializeArgs, _ *Empty) error {
 			host:   host,
 			bus:    bus,
 			config: args.Config,
+			env:    args.Environment,
 		})
 	}
 
