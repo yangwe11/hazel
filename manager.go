@@ -47,6 +47,14 @@ type ManagerConfig struct {
 	// Attributes holds host-defined scalar facts (environment, region, etc.)
 	// shared with every plugin via Context.Environment(). Keys and values are strings.
 	Attributes map[string]string
+
+	// Logger is the hclog logger the host uses for go-plugin internals and for
+	// collecting plugin logs. go-plugin reads each plugin's stderr line-by-line
+	// and re-emits it through this logger with the plugin binary's name as a
+	// prefix; the plugin's os.Stdout/os.Stderr are also synced to the host's
+	// stdout/stderr. If nil, a logger named "hazel" writing to stderr at Info
+	// level is used.
+	Logger hclog.Logger
 }
 
 // DefaultManagerConfig returns a ManagerConfig with sensible defaults.
@@ -157,6 +165,14 @@ type Manager struct {
 // NewManager creates a Manager. Plugins are registered via Discover before
 // their lifecycle is driven.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
+	if cfg.Logger == nil {
+		cfg.Logger = hclog.New(&hclog.LoggerOptions{
+			Name:   "hazel",
+			Level:  hclog.Info,
+			Output: os.Stderr,
+		})
+	}
+
 	m := &Manager{
 		config:     cfg,
 		plugins:    make(map[string]*PluginInstance),
@@ -300,7 +316,7 @@ func (m *Manager) Load(pluginID string) error {
 		Managed:         true,
 		SyncStdout:      os.Stdout,
 		SyncStderr:      os.Stderr,
-		Logger:          hclog.NewNullLogger(),
+		Logger:          m.config.Logger,
 	})
 
 	pi.client = client
