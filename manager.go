@@ -55,6 +55,11 @@ type ManagerConfig struct {
 	// stdout/stderr. If nil, a logger named "hazel" writing to stderr at Info
 	// level is used.
 	Logger hclog.Logger
+
+	// Restart, if set, configures automatic restart of crashed plugins. If nil
+	// (the default), a crashed plugin stays in StateError until restarted
+	// manually.
+	Restart *RestartPolicy
 }
 
 // DefaultManagerConfig returns a ManagerConfig with sensible defaults.
@@ -81,6 +86,11 @@ type PluginInstance struct {
 	// started is true once Start has succeeded at least once; it drives
 	// StartArgs.First across restarts.
 	started bool
+
+	// restarts counts consecutive auto-restarts; autoRestarting is true while an
+	// auto-restart sequence is in flight (see RestartPolicy).
+	restarts       int
+	autoRestarting bool
 
 	stateMu   sync.Mutex
 	changedAt time.Time
@@ -447,6 +457,15 @@ func (m *Manager) Start(pluginID string) error {
 	}
 	pi.started = true
 
+	// Reset the auto-restart counter on a manual start; an auto-restart leaves
+	// the counter in place so the crash-loop budget is enforced.
+	pi.stateMu.Lock()
+	if !pi.autoRestarting {
+		pi.restarts = 0
+	}
+	pi.autoRestarting = false
+	pi.stateMu.Unlock()
+
 	// Recreate the monitor signal for this run and start crash monitoring.
 	pi.stopCh = make(chan struct{})
 	pi.stopOnce = sync.Once{}
@@ -607,6 +626,7 @@ func (m *Manager) monitor(pi *PluginInstance) {
 				m.log.Printf("plugin %s exited unexpectedly", pi.Meta.ID)
 				pi.TransitionTo(StateError,
 					fmt.Errorf("%w: process terminated", ErrPluginCrashed))
+				m.maybeAutoRestart(pi)
 				return
 			}
 		case <-pi.stopCh:
