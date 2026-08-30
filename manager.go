@@ -301,7 +301,7 @@ func (m *Manager) Load(pluginID string) error {
 	}
 
 	plugins := map[string]plugin.Plugin{
-		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{}, eventHost: &eventHostRPCServer{manager: m, pluginID: pluginID}, manager: m},
+		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{}, eventHost: &eventHostRPCServer{manager: m, pluginID: pluginID}, manager: m, pluginID: pluginID},
 		eventPluginName:     &eventPlugin{},
 	}
 	// Merge registered plugin services (host→plugin extensions).
@@ -405,6 +405,19 @@ func (m *Manager) Initialize(pluginID string) error {
 		pi.client.Kill()
 		pi.TransitionTo(StateError, fmt.Errorf("initialize rpc: %w", err))
 		return fmt.Errorf("initialize plugin %s: %w", pluginID, err)
+	}
+
+	// Wire each registered host service so a bidirectional capability can bind
+	// its host→plugin direction now that the plugin is initialized.
+	for _, hs := range hostServiceSnapshot() {
+		if hs.Wire == nil {
+			continue
+		}
+		if err := hs.Wire(m, pluginID); err != nil {
+			pi.client.Kill()
+			pi.TransitionTo(StateError, fmt.Errorf("wire %s: %w", hs.Name, err))
+			return fmt.Errorf("wire %s for plugin %s: %w", hs.Name, pluginID, err)
+		}
 	}
 
 	if err := pi.TransitionTo(StateInitialized, nil); err != nil {

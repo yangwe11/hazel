@@ -51,8 +51,10 @@ type HostService struct {
 	Name string
 
 	// Server builds the host-side net/rpc receiver (methods of the form
-	// Method(args, *reply) error).
-	Server func(m *Manager) any
+	// Method(args, *reply) error). It is called once per plugin during
+	// Initialize, with the plugin's ID, so the receiver can tell which plugin
+	// is connected.
+	Server func(m *Manager, pluginID string) any
 
 	// Client builds the plugin-side wire client from the dialed RPC connection.
 	Client func(client *rpc.Client) any
@@ -60,6 +62,13 @@ type HostService struct {
 	// Inject hands the Client result to a plugin that opts in via an *Aware
 	// interface. May be nil for services consumed another way.
 	Inject func(impl, client any)
+
+	// Wire, if set, runs on the host during Initialize after the plugin's
+	// Initialize RPC succeeds. A bidirectional capability uses it to dispense
+	// its paired host→plugin service (via Manager.Dispense) and bind it, so the
+	// host author need not wire it manually. It runs for every plugin; keep it
+	// cheap for plugins that do not participate.
+	Wire func(m *Manager, pluginID string) error
 }
 
 // RegisterHostService registers a plugin→host capability. Register before

@@ -145,9 +145,12 @@ env.Attributes     // 主进程定义的 map[string]string
 无需改动框架即可新增能力。在 `init()` 里注册，然后在两个二进制里 import 该包。
 
 - **插件 → 主进程**：`hazel.RegisterHostService` — 主进程提供服务，插件通过 `*Aware`
-  接口消费。见 [`example/greeter`](example/greeter/greeter.go)。
+  接口消费。`Server` 收到插件 ID，可选的 `Wire` 钩子在 Initialize 后运行，用于绑定
+  host→plugin 方向。
 - **主进程 → 插件**：`hazel.RegisterPluginService` — 插件提供服务，主进程通过
   `Manager.Dispense` 消费。
+- **双向**：各注册一个；`Wire` 钩子自动接线 host→plugin 方向。见
+  [`example/greeter`](example/greeter/greeter.go)。
 
 ### 日志
 

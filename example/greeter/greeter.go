@@ -32,7 +32,7 @@ const serviceName = "greeter"
 func init() {
 	hazel.RegisterHostService(hazel.HostService{
 		Name:   serviceName,
-		Server: func(_ *hazel.Manager) any { return &greeterServer{} },
+		Server: func(_ *hazel.Manager, _ string) any { return &greeterServer{} },
 		Client: func(client *rpc.Client) any { return &Greeter{client: client} },
 		Inject: func(impl, client any) {
 			if ga, ok := impl.(GreeterAware); ok {

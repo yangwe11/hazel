@@ -79,6 +79,7 @@ type lifecycleRPC struct {
 	host      hostRPC      // served back to the plugin during Initialize
 	eventHost eventHostRPC // built-in event bus host service
 	manager   *Manager     // for serving registered host services
+	pluginID  string       // which plugin is being served
 }
 
 func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
@@ -100,7 +101,7 @@ func (c *lifecycleRPC) Initialize(args InitializeArgs) error {
 	for _, hs := range registered {
 		id := c.broker.NextId()
 		args.HostServices[hs.Name] = id
-		go c.broker.AcceptAndServe(id, hs.Server(c.manager))
+		go c.broker.AcceptAndServe(id, hs.Server(c.manager, c.pluginID))
 	}
 
 	reply := Empty{}
@@ -198,6 +199,7 @@ type lifecyclePlugin struct {
 	eventHost eventHostRPC    // host side: built-in event bus host service
 	manager   *Manager        // host side: for serving registered host services
 	eventBus  *pluginEventBus // plugin side: shared with the event plugin
+	pluginID  string          // host side: which plugin is being served
 }
 
 // Server runs on the PLUGIN side.
@@ -207,5 +209,5 @@ func (p *lifecyclePlugin) Server(broker *plugin.MuxBroker) (interface{}, error) 
 
 // Client runs on the HOST side.
 func (p *lifecyclePlugin) Client(broker *plugin.MuxBroker, client *rpc.Client) (interface{}, error) {
-	return &lifecycleRPC{client: client, broker: broker, host: p.host, eventHost: p.eventHost, manager: p.manager}, nil
+	return &lifecycleRPC{client: client, broker: broker, host: p.host, eventHost: p.eventHost, manager: p.manager, pluginID: p.pluginID}, nil
 }

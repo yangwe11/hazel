@@ -157,10 +157,12 @@ Add new capabilities without touching the framework. Register in `init()`, then
 import the package from both binaries.
 
 - **plugin → host**: `hazel.RegisterHostService` — the host serves it, plugins
-  consume it via an `*Aware` interface. See
-  [`example/greeter`](example/greeter/greeter.go).
+  consume it via an `*Aware` interface. `Server` receives the plugin ID, and an
+  optional `Wire` hook runs after Initialize to bind a host→plugin side.
 - **host → plugin**: `hazel.RegisterPluginService` — the plugin serves it, the
   host consumes it via `Manager.Dispense`.
+- **bidirectional**: register one of each; the `Wire` hook auto-wires the
+  host→plugin direction. See [`example/greeter`](example/greeter/greeter.go).
 
 ### Logging
 

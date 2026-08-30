@@ -74,7 +74,7 @@ func init() {
 
 	RegisterHostService(HostService{
 		Name:   greetServiceName,
-		Server: func(m *Manager) any { return &greetServer{} },
+		Server: func(m *Manager, _ string) any { return &greetServer{} },
 		Client: func(client *rpc.Client) any { return &greetClient{client: client} },
 		Inject: func(impl, client any) {
 			if ga, ok := impl.(GreetAware); ok {
@@ -244,7 +244,7 @@ func TestRegisterDuplicateDetection(t *testing.T) {
 	// a valid no-op so it is harmless to later lifecycle tests.
 	noop := HostService{
 		Name:   "test-dup-host",
-		Server: func(_ *Manager) any { return &greetServer{} },
+		Server: func(_ *Manager, _ string) any { return &greetServer{} },
 		Client: func(c *rpc.Client) any { return &greetClient{client: c} },
 	}
 	RegisterHostService(noop)
