@@ -10,7 +10,7 @@ Hazel 是一个基于 [hashicorp/go-plugin] 的 Go 插件框架。它把应用�
 
 ## 特性
 
-- **生命周期** — 发现、加载、初始化、启动、停止插件，支持依赖排序的并行启动与崩溃监控。
+- **生命周期** — 发现、加载、初始化、启动、停止插件，支持依赖排序的并行启动、崩溃监控与自动恢复。
 - **事件总线** — 主进程与插件按点分隔的主题模式发布/订阅（`plugin.running`、`config.changed` 等）。
 - **配置** — 初始化时下发每插件的 JSON 配置，运行时通过 `config.changed` 事件热更新。
 - **环境** — 向每个插件下发共享的主进程事实（引擎版本、数据目录、自定义属性）。
@@ -151,6 +151,8 @@ env.Attributes     // 主进程定义的 map[string]string
   `Manager.Dispense` 消费。
 - **双向**：各注册一个；`Wire` 钩子自动接线 host→plugin 方向。见
   [`example/greeter`](example/greeter/greeter.go)。
+
+一个真实的第一方扩展 [`health`](health) 就是这样实现的插件就绪/存活上报。
 
 ### 日志
 

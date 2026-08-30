@@ -1,6 +1,6 @@
 # hazel
 
-> [简体中文](README.zh-CN.md)
+> [中文](README.zh-CN.md)
 
 Hazel is a Go plugin framework built on [hashicorp/go-plugin]. It runs your
 application as a **host** process plus a set of **plugin** processes, connected
@@ -12,7 +12,7 @@ an extension registry, and log collection built in.
 ## Features
 
 - **Lifecycle** — discover, load, initialize, start, and stop plugins, with
-  dependency-ordered parallel startup and crash monitoring.
+  dependency-ordered parallel startup, crash monitoring, and auto-restart.
 - **Event bus** — the host and plugins publish and subscribe to dot-separated
   topic patterns (`plugin.running`, `config.changed`, …).
 - **Configuration** — per-plugin JSON config pushed at Initialize, plus runtime
@@ -163,6 +163,9 @@ import the package from both binaries.
   host consumes it via `Manager.Dispense`.
 - **bidirectional**: register one of each; the `Wire` hook auto-wires the
   host→plugin direction. See [`example/greeter`](example/greeter/greeter.go).
+
+A real first-party extension, [`health`](health), ships plugin readiness and
+liveness reporting this way.
 
 ### Logging
 
