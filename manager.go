@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,7 +167,7 @@ type Manager struct {
 
 	events *eventBus // routes events between plugins and the host
 
-	log        *log.Logger
+	logger     hclog.Logger
 	shutdownCh chan struct{}
 }
 
@@ -186,10 +185,10 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 	m := &Manager{
 		config:     cfg,
 		plugins:    make(map[string]*PluginInstance),
-		log:        log.New(os.Stdout, "[hazel] ", log.LstdFlags),
+		logger:     cfg.Logger,
 		shutdownCh: make(chan struct{}),
 	}
-	m.events = newEventBus(m.log)
+	m.events = newEventBus(cfg.Logger.Named("events"))
 	return m, nil
 }
 
@@ -335,7 +334,7 @@ func (m *Manager) Load(pluginID string) error {
 		return err
 	}
 
-	m.log.Printf("plugin %s loaded (binary: %s)", pluginID, execPath)
+	m.logger.Info("plugin loaded", "plugin", pluginID, "binary", execPath)
 	return nil
 }
 
@@ -434,7 +433,7 @@ func (m *Manager) Initialize(pluginID string) error {
 		return err
 	}
 
-	m.log.Printf("plugin %s initialized", pluginID)
+	m.logger.Info("plugin initialized", "plugin", pluginID)
 	return nil
 }
 
@@ -476,7 +475,7 @@ func (m *Manager) Start(pluginID string) error {
 		return err
 	}
 
-	m.log.Printf("plugin %s started", pluginID)
+	m.logger.Info("plugin started", "plugin", pluginID)
 	return nil
 }
 
@@ -507,10 +506,10 @@ func (m *Manager) Stop(pluginID string) error {
 		select {
 		case err := <-done:
 			if err != nil {
-				m.log.Printf("plugin %s: graceful stop error: %v", pluginID, err)
+				m.logger.Warn("graceful stop error", "plugin", pluginID, "error", err)
 			}
 		case <-time.After(m.config.StopTimeout):
-			m.log.Printf("plugin %s: stop timeout, force-killing", pluginID)
+			m.logger.Warn("stop timeout, force-killing", "plugin", pluginID)
 		}
 	}
 
@@ -523,7 +522,7 @@ func (m *Manager) Stop(pluginID string) error {
 		return err
 	}
 
-	m.log.Printf("plugin %s stopped", pluginID)
+	m.logger.Info("plugin stopped", "plugin", pluginID)
 	return nil
 }
 
@@ -623,7 +622,7 @@ func (m *Manager) monitor(pi *PluginInstance) {
 		select {
 		case <-ticker.C:
 			if pi.client.Exited() {
-				m.log.Printf("plugin %s exited unexpectedly", pi.Meta.ID)
+				m.logger.Error("plugin exited unexpectedly", "plugin", pi.Meta.ID)
 				pi.TransitionTo(StateError,
 					fmt.Errorf("%w: process terminated", ErrPluginCrashed))
 				m.maybeAutoRestart(pi)
@@ -655,7 +654,7 @@ func (m *Manager) Shutdown() error {
 		}
 		if pi.State == StateRunning || pi.State == StateInitialized {
 			if err := m.Stop(id); err != nil {
-				m.log.Printf("error stopping %s during shutdown: %v", id, err)
+				m.logger.Warn("error stopping plugin during shutdown", "plugin", id, "error", err)
 			}
 		}
 	}

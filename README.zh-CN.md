@@ -156,9 +156,9 @@ env.Attributes     // 主进程定义的 map[string]string
 
 ### 日志
 
-插件日志自动收集：go-plugin 逐行读取每个插件的 stderr，通过主进程 logger 重新输出，
-带插件名前缀。用 `ManagerConfig.Logger`（`hclog.Logger`）配置，默认写 stderr、`Info` 级。
-注意：无级别前缀的 `log.Printf` 输出会被 go-plugin 归为 `Debug`。
+日志统一走 `hclog`，由 `ManagerConfig.Logger` 配置（默认写 stderr、`Info` 级）。
+主进程自身的生命周期消息和每个插件的日志都汇入它：go-plugin 逐行读取插件 stderr，
+带插件名前缀重新输出。无级别前缀的 `log.Printf` 会被 go-plugin 归为 `Debug`。
 
 ### 发现
 

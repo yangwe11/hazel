@@ -243,7 +243,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 	batches, err := graph.resolveOrder()
 	if err != nil {
 		// If there's a cycle, stop everything individually.
-		m.log.Printf("dependency cycle detected during stop; stopping all plugins individually")
+		m.logger.Warn("dependency cycle detected during stop; stopping all plugins individually")
 		for id := range metaMap {
 			pi := m.GetPlugin(id)
 			if pi != nil && (pi.State == StateRunning || pi.State == StateInitialized) {
@@ -265,7 +265,7 @@ func (m *Manager) StopAll(ctx context.Context) error {
 			go func(pluginID string) {
 				defer wg.Done()
 				if err := m.Stop(pluginID); err != nil {
-					m.log.Printf("error stopping %s: %v", pluginID, err)
+					m.logger.Warn("error stopping plugin", "plugin", pluginID, "error", err)
 				}
 			}(id)
 		}

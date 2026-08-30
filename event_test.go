@@ -1,13 +1,13 @@
 package hazel
 
 import (
-	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	hclog "github.com/hashicorp/go-hclog"
 )
 
 func TestMatchTopic(t *testing.T) {
@@ -37,7 +37,7 @@ func TestMatchTopic(t *testing.T) {
 
 // newTestBus builds an event bus with a discarded logger for unit tests.
 func newTestBus() *eventBus {
-	return newEventBus(log.New(io.Discard, "", 0))
+	return newEventBus(hclog.NewNullLogger())
 }
 
 func TestEventBusPublishSubscribe(t *testing.T) {
@@ -133,7 +133,7 @@ func TestLifecycleEventPublished(t *testing.T) {
 	}
 }
 
-// eventRecordingPlugin subscribes to "test.topic" via its Context and writes 
+// eventRecordingPlugin subscribes to "test.topic" via its Context and writes
 // each received event name to the file named by HAZEL_TEST_EVENTS.
 type eventRecordingPlugin struct {
 	bus EventBus

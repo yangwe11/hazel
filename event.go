@@ -3,12 +3,12 @@ package hazel
 import (
 	"encoding/gob"
 	"fmt"
-	"log"
 	"net/rpc"
 	"strings"
 	"sync"
 	"time"
 
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 )
 
@@ -83,8 +83,8 @@ type eventBus struct {
 	// a slow plugin cannot stall publishers.
 	deliveries map[string]*pluginDelivery
 
-	wg  sync.WaitGroup
-	log *log.Logger
+	wg     sync.WaitGroup
+	logger hclog.Logger
 }
 
 // subscription is one subscriber's interest in a topic pattern.
@@ -107,11 +107,11 @@ type pluginDelivery struct {
 // plugin cannot stall publishers (mirrors PluginInstance.Listen).
 const eventQueueSize = 8
 
-func newEventBus(log *log.Logger) *eventBus {
+func newEventBus(logger hclog.Logger) *eventBus {
 	return &eventBus{
 		subs:       make(map[string]*subscription),
 		deliveries: make(map[string]*pluginDelivery),
-		log:        log,
+		logger:     logger,
 	}
 }
 
@@ -191,7 +191,7 @@ func (b *eventBus) publish(event Event) {
 		select {
 		case pd.queue <- event:
 		default:
-			b.log.Printf("event: dropped %q for %s (delivery queue full)", event.Name, sub.owner)
+			b.logger.Warn("event dropped (delivery queue full)", "topic", event.Name, "plugin", sub.owner)
 		}
 	}
 }
@@ -260,7 +260,7 @@ func (b *eventBus) deliverLoop(pd *pluginDelivery) {
 		select {
 		case event := <-pd.queue:
 			if err := pd.deliver(event); err != nil {
-				b.log.Printf("event: deliver failed: %v", err)
+				b.logger.Error("event deliver failed", "error", err)
 			}
 		case <-pd.done:
 			return

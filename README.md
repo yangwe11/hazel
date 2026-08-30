@@ -169,10 +169,10 @@ liveness reporting this way.
 
 ### Logging
 
-Plugin logs are collected automatically: go-plugin reads each plugin's stderr
-line-by-line and re-emits it through the host's logger, prefixed with the plugin
-name. Configure it via `ManagerConfig.Logger` (an `hclog.Logger`); the default
-writes to stderr at `Info` level. Note that un-prefixed `log.Printf` output is
+Logging is unified on `hclog` via `ManagerConfig.Logger` (the default writes to
+stderr at `Info` level). The host's own lifecycle messages and each plugin's
+logs both flow through it: go-plugin reads a plugin's stderr line-by-line and
+re-emits it with the plugin name as a prefix. Un-prefixed `log.Printf` output is
 classified as `Debug` by go-plugin.
 
 ### Discovery

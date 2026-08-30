@@ -28,7 +28,7 @@ func (m *Manager) maybeAutoRestart(pi *PluginInstance) {
 	pi.stateMu.Lock()
 	if pi.restarts >= p.MaxRetries {
 		pi.stateMu.Unlock()
-		m.log.Printf("plugin %s: giving up after %d auto-restart(s)", pi.Meta.ID, p.MaxRetries)
+		m.logger.Warn("giving up on auto-restart", "plugin", pi.Meta.ID, "max_retries", p.MaxRetries)
 		return
 	}
 	pi.restarts++
@@ -41,9 +41,9 @@ func (m *Manager) maybeAutoRestart(pi *PluginInstance) {
 		if p.Backoff > 0 {
 			time.Sleep(p.Backoff)
 		}
-		m.log.Printf("plugin %s: auto-restarting (attempt %d/%d)", pluginID, attempt, p.MaxRetries)
+		m.logger.Info("auto-restarting", "plugin", pluginID, "attempt", attempt, "max_retries", p.MaxRetries)
 		if err := m.restartOne(pluginID); err != nil {
-			m.log.Printf("plugin %s: auto-restart failed: %v", pluginID, err)
+			m.logger.Warn("auto-restart failed", "plugin", pluginID, "error", err)
 		}
 	}()
 }
