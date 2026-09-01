@@ -190,6 +190,9 @@ engineRequirement: ">=0.1.0"  # optional
 depends: []       # optional, with version constraints
 ```
 
+A `STATIC` plugin is files only: it is discovered and tracked by the lifecycle
+but never launched as a process (`Load` only verifies its directory).
+
 ## License
 
 [Apache 2.0](LICENSE) — Copyright (c) 2026 yangwe11.

@@ -158,6 +158,13 @@ func (pi *PluginInstance) signalStop() {
 	pi.stopOnce.Do(func() { close(pi.stopCh) })
 }
 
+// isStatic reports whether the plugin is a static plugin — a directory of
+// files with no process. Static plugins skip every process-launching and RPC
+// step and simply advance through the lifecycle states.
+func (pi *PluginInstance) isStatic() bool {
+	return pi.Meta.Type == PluginTypeStatic
+}
+
 // Manager manages the plugin lifecycle: discovery, loading, initialization,
 // start, stop, and dependency-ordered parallel startup.
 type Manager struct {
@@ -284,6 +291,19 @@ func (m *Manager) Load(pluginID string) error {
 		return fmt.Errorf("%w: cannot load from %s", ErrInvalidStateTransition, pi.State)
 	}
 
+	// A static plugin is just a directory of files — there is no process to
+	// launch. Validate that its directory exists, then advance to Loaded.
+	if pi.isStatic() {
+		if _, err := os.Stat(pi.PluginDir); err != nil {
+			return fmt.Errorf("static plugin %s directory: %w", pluginID, err)
+		}
+		if err := pi.TransitionTo(StateLoaded, nil); err != nil {
+			return err
+		}
+		m.logger.Info("plugin loaded (static)", "plugin", pluginID, "dir", pi.PluginDir)
+		return nil
+	}
+
 	// Wait for any prior crash monitor to exit before resetting per-lifecycle
 	// state, so a restart never races a stale monitor or client.
 	pi.monitorWG.Wait()
@@ -348,6 +368,16 @@ func (m *Manager) Initialize(pluginID string) error {
 
 	if !CanTransition(pi.State, StateInitialized) {
 		return fmt.Errorf("%w: cannot initialize from %s", ErrInvalidStateTransition, pi.State)
+	}
+
+	// A static plugin has no process or code, so there is nothing to start or
+	// call over RPC. Advance straight to Initialized.
+	if pi.isStatic() {
+		if err := pi.TransitionTo(StateInitialized, nil); err != nil {
+			return err
+		}
+		m.logger.Info("plugin initialized (static)", "plugin", pluginID)
+		return nil
 	}
 
 	// Start the plugin process (handshake). Start returns the address
@@ -449,6 +479,16 @@ func (m *Manager) Start(pluginID string) error {
 		return fmt.Errorf("%w: cannot start from %s", ErrInvalidStateTransition, pi.State)
 	}
 
+	// A static plugin has no process to start or monitor; it is "running" the
+	// moment its files are loaded. Advance straight to Running.
+	if pi.isStatic() {
+		if err := pi.TransitionTo(StateRunning, nil); err != nil {
+			return err
+		}
+		m.logger.Info("plugin started (static)", "plugin", pluginID)
+		return nil
+	}
+
 	first := !pi.started
 	if err := pi.lifecycleClient.Start(StartArgs{First: first}); err != nil {
 		pi.TransitionTo(StateError, fmt.Errorf("start rpc: %w", err))
@@ -489,6 +529,15 @@ func (m *Manager) Stop(pluginID string) error {
 
 	if !CanTransition(pi.State, StateStopped) {
 		return fmt.Errorf("%w: cannot stop from %s", ErrInvalidStateTransition, pi.State)
+	}
+
+	// A static plugin has no process or monitor; just advance to Stopped.
+	if pi.isStatic() {
+		if err := pi.TransitionTo(StateStopped, nil); err != nil {
+			return err
+		}
+		m.logger.Info("plugin stopped (static)", "plugin", pluginID)
+		return nil
 	}
 
 	// Tell the crash monitor this exit is expected and wait for it to finish so
@@ -569,6 +618,9 @@ func (m *Manager) Dispense(pluginID, serviceName string) (any, error) {
 	pi, err := m.getPlugin(pluginID)
 	if err != nil {
 		return nil, err
+	}
+	if pi.isStatic() {
+		return nil, fmt.Errorf("plugin %s is static and has no services to dispense", pluginID)
 	}
 	if pi.client == nil {
 		return nil, fmt.Errorf("plugin %s is not loaded", pluginID)

@@ -174,6 +174,8 @@ engineRequirement: ">=0.1.0"  # 可选
 depends: []       # 可选，带版本约束
 ```
 
+`STATIC` 插件仅由文件构成：会被发现并纳入生命周期管理，但不会作为进程启动（`Load` 只校验其目录）。
+
 ## License
 
 [Apache 2.0](LICENSE) — Copyright (c) 2026 yangwe11。
