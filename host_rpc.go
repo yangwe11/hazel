@@ -39,14 +39,17 @@ func (c *hostRPCClient) Ping(_ Empty, _ *Empty) error {
 	return c.client.Call("Plugin.Ping", Empty{}, &Empty{})
 }
 
-// hostRPCServer serves the core host capability on the host side. It is
-// separate from Manager so the RPC surface stays minimal and explicit — adding
-// an exported method to Manager does not accidentally expose it to plugins.
-type hostRPCServer struct{}
+// hostRPCServer serves the core host capability on the host side. It is a
+// separate type from Manager so the RPC surface stays minimal and explicit —
+// only methods defined here are callable by plugins; an exported method added
+// to Manager is not exposed. It holds a Manager reference only to read host
+// liveness.
+type hostRPCServer struct {
+	manager *Manager
+}
 
-func (hostRPCServer) Ping(_ Empty, _ *Empty) error {
-	// TODO: report real liveness once health tracking is added.
-	return nil
+func (s hostRPCServer) Ping(_ Empty, _ *Empty) error {
+	return s.manager.ping()
 }
 
 // hostFacade exposes the clean, plugin-facing Host API on top of a hostRPCClient.

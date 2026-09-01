@@ -40,4 +40,9 @@ var (
 	// ErrSubscriptionNotFound indicates an event subscription ID was not found
 	// or does not belong to the caller.
 	ErrSubscriptionNotFound = errors.New("event subscription not found")
+
+	// ErrHostNotLive indicates the host manager has begun shutdown and is no
+	// longer accepting work. Host.Ping returns it to plugins that check in
+	// during shutdown.
+	ErrHostNotLive = errors.New("host is not live")
 )

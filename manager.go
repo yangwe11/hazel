@@ -339,7 +339,7 @@ func (m *Manager) Load(pluginID string) error {
 	}
 
 	plugins := map[string]plugin.Plugin{
-		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{}, eventHost: &eventHostRPCServer{manager: m, pluginID: pluginID}, manager: m, pluginID: pluginID},
+		lifecyclePluginName: &lifecyclePlugin{host: &hostRPCServer{manager: m}, eventHost: &eventHostRPCServer{manager: m, pluginID: pluginID}, manager: m, pluginID: pluginID},
 		eventPluginName:     &eventPlugin{},
 	}
 	// Merge registered plugin services (host→plugin extensions).
@@ -646,6 +646,18 @@ func (m *Manager) Dispense(pluginID, serviceName string) (any, error) {
 // =========================================================================
 // Internal helpers
 // =========================================================================
+
+// ping reports whether the host is live: nil while the manager is running, and
+// ErrHostNotLive once Shutdown has begun. It backs Host.Ping, letting a plugin
+// detect that the host is winding down before its connection is closed.
+func (m *Manager) ping() error {
+	select {
+	case <-m.shutdownCh:
+		return ErrHostNotLive
+	default:
+		return nil
+	}
+}
 
 // onPluginTransition reacts to a plugin's state change by publishing a
 // "plugin.<state>" event and, on terminal states, dropping the plugin's event
