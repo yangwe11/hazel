@@ -23,6 +23,8 @@ an extension registry, and log collection built in.
   a two-line registry.
 - **Log collection** — plugin stderr/stdout is merged into the host's `hclog`
   logger, prefixed with the plugin name.
+- **Transport security** — optional mTLS between host and plugins, enabled with
+  `ManagerConfig.AutoMTLS` (host-side only; plugins need no change).
 
 ## Install
 

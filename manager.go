@@ -55,6 +55,15 @@ type ManagerConfig struct {
 	// level is used.
 	Logger hclog.Logger
 
+	// AutoMTLS enables transport authentication between the host and each
+	// plugin process. When true, go-plugin generates one-time certificates and
+	// negotiates mTLS over the handshake: the host refuses to connect to any
+	// process other than the one it started, and the plugin refuses any host
+	// other than its launcher. It is host-side only — plugin binaries need no
+	// change, because go-plugin's Serve auto-negotiates from the handshake
+	// environment.
+	AutoMTLS bool
+
 	// Restart, if set, configures automatic restart of crashed plugins. If nil
 	// (the default), a crashed plugin stays in StateError until restarted
 	// manually.
@@ -343,6 +352,7 @@ func (m *Manager) Load(pluginID string) error {
 		Plugins:         plugins,
 		Cmd:             cmd,
 		Managed:         true,
+		AutoMTLS:        m.config.AutoMTLS,
 		SyncStdout:      os.Stdout,
 		SyncStderr:      os.Stderr,
 		Logger:          m.config.Logger,
